@@ -319,12 +319,18 @@ const mediaHandler = async (ctx) => {
 };
 bot.on(['photo', 'video', 'document'], mediaHandler);
 
+// index.js
 
-// --- 9. إعداد Vercel Webhook ---
 module.exports = async (req, res) => {
-    try {
-        await bot.handleUpdate(req.body, res);
-    } catch (err) {
-        console.error('Error in webhook handler:', err);
+    // First, check if the request is a POST request from Telegram
+    if (req.method === 'POST') {
+        try {
+            await bot.handleUpdate(req.body, res);
+        } catch (err) {
+            console.error('Error in webhook handler:', err);
+        }
+    } else {
+        // If it's not a POST request, just send a friendly response
+        res.status(200).send('Bot is running and waiting for messages from Telegram.');
     }
 };
