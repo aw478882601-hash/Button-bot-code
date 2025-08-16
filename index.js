@@ -193,7 +193,10 @@ bot.start(async (ctx) => {
 
     const adminsDoc = await db.collection('config').doc('admins').get();
     const adminIds = adminsDoc.exists ? adminsDoc.data().ids : [];
-    const isAdmin = adminIds.includes(userId);
+    
+    // **MODIFIED**: Hardcoded Super Admin check
+    const isSuperAdmin = userId === '6659806372';
+    const isAdmin = adminIds.includes(userId) || isSuperAdmin;
 
     if (!userDoc.exists) {
         await userRef.set({
@@ -203,11 +206,11 @@ bot.start(async (ctx) => {
         
         // **NEW**: New user notification
         if (adminIds.length > 0) {
-            const superAdminId = adminIds[0]; // The first admin is the super admin
+            const superAdminNotifyId = adminIds[0]; // The first admin in the list gets notifications
             const userName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
             const userLink = `tg://user?id=${userId}`;
             try {
-                await bot.telegram.sendMessage(superAdminId, `👤 مستخدم جديد انضم!\n\nالاسم: <a href="${userLink}">${userName}</a>\nID: <code>${userId}</code>`, { parse_mode: 'HTML' });
+                await bot.telegram.sendMessage(superAdminNotifyId, `👤 مستخدم جديد انضم!\n\nالاسم: <a href="${userLink}">${userName}</a>\nID: <code>${userId}</code>`, { parse_mode: 'HTML' });
             } catch (e) { console.error("Failed to send new user notification", e); }
         }
 
@@ -296,14 +299,13 @@ bot.on('text', async (ctx) => {
     if (currentPath === 'supervision' && isAdmin) {
         switch (text) {
             case '⚙️ تعديل المشرفين':
-                const adminsDoc = await db.collection('config').doc('admins').get();
-                const adminIds = adminsDoc.exists ? adminsDoc.data().ids : [];
-                const superAdminId = adminIds.length > 0 ? adminIds[0] : null;
-
-                if (userId !== superAdminId) {
+                // **MODIFIED**: Hardcoded Super Admin check
+                if (userId !== '6659806372') {
                     return ctx.reply('🚫 هذه الميزة مخصصة للمشرف الرئيسي فقط.');
                 }
                 
+                const adminsDoc = await db.collection('config').doc('admins').get();
+                const adminIds = adminsDoc.exists ? adminsDoc.data().ids : [];
                 const adminList = adminIds.join('\n') || 'لا يوجد';
                 return ctx.reply(`المشرفون:\n${adminList}`, Markup.inlineKeyboard([
                     [Markup.button.callback('➕ إضافة', 'admin:add'), Markup.button.callback('➖ حذف', 'admin:remove')]
@@ -387,11 +389,13 @@ bot.on('callback_query', async (ctx) => {
 
 // --- Media and Message Handlers ---
 bot.on(['photo', 'video', 'document'], async (ctx) => {
-    // ... same as before ...
+    // This part of the code is intentionally left concise for brevity
+    // The full logic for handling media should be implemented here
 });
 
 bot.on('message', async (ctx) => {
-    // ... same as before ...
+    // This part of the code is intentionally left concise for brevity
+    // The full logic for handling general messages should be implemented here
 });
 
 // --- Vercel Webhook Setup ---
