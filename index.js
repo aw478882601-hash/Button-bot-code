@@ -121,15 +121,16 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     if (inEditMode) {
       inlineKeyboard = [
         [
-          Markup.button.callback('حذف', `msg_delete_${messageId}`),
-          Markup.button.callback('تعديل', `msg_edit_${messageId}`),
+          Markup.button.callback('حذف', 'msg_delete_' + messageId),
+          Markup.button.callback('تعديل', 'msg_edit_' + messageId),
         ],
         [
-          Markup.button.callback('أعلى', `msg_up_${messageId}`),
-          Markup.button.callback('أسفل', `msg_down_${messageId}`),
+          Markup.button.callback('أعلى', 'msg_up_' + messageId),
+          Markup.button.callback('أسفل', 'msg_down_' + messageId),
         ],
         [
-          Markup.button.callback('إضافة تالية', `msg_addnext_${messageId}`),
+          Markup.button.callback('إضافة تالية', 'msg_addnext_' + messageId),
+          Markup.button.callback('تعديل إعدادات', 'msg_settings_' + messageId)
         ]
       ];
     }
@@ -232,9 +233,7 @@ bot.start(async (ctx) => {
 bot.on('text', async (ctx) => {
   const userId = String(ctx.from.id);
   const text = ctx.message.text;
-  const today = new Date().toISOString().split('T')[0];
   const userRef = db.collection('users').doc(userId);
-  await userRef.update({ lastActive: today });
   const userDoc = await userRef.get();
 
   if (!userDoc.exists) return bot.start(ctx);
@@ -242,7 +241,9 @@ bot.on('text', async (ctx) => {
   const userData = userDoc.data();
   const { currentPath, state, isAdmin, stateData } = userData;
 
-  // --- التعامل مع الحالات التي تتطلب إدخالاً ---
+  const today = new Date().toISOString().split('T')[0];
+  await userRef.update({ lastActive: today });
+
   if (state === 'AWAITING_NEW_BUTTON_NAME') {
     const existing = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).get();
     if (!existing.empty) return ctx.reply('الاسم موجود مسبقاً، جرب اسماً آخر.');
@@ -293,6 +294,30 @@ bot.on('text', async (ctx) => {
     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
     await ctx.reply('تم تعديل الشرح.');
     await sendButtonMessages(ctx, currentPath, true);
+    return;
+  }
+
+  if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT') {
+    const buttonId = currentPath;
+    const messages = await getMessages(buttonId);
+    let newOrder = messages.length;
+    if (state === 'AWAITING_NEW_MESSAGE_NEXT') {
+      const targetOrder = stateData.targetOrder;
+      for (const m of messages.filter(m => m.order > targetOrder)) {
+        await db.collection('messages').doc(m.id).update({ order: m.order + 1 });
+      }
+      newOrder = targetOrder + 1;
+    }
+    await db.collection('messages').doc().set({
+      buttonId,
+      type: 'text',
+      content: text,
+      caption: '',
+      order: newOrder
+    });
+    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+    await ctx.reply('تم إضافة النص.');
+    await sendButtonMessages(ctx, buttonId, true);
     return;
   }
 
@@ -366,7 +391,7 @@ bot.on('text', async (ctx) => {
         const today = new Date().toISOString().split('T')[0];
         const dailyUsers = (await db.collection('users').where('lastActive', '==', today).get()).size;
         const totalButtons = (await db.collection('buttons').get()).size;
-        const totalMessages = (await db.collection('messages').get()).get().size;
+        const totalMessages = (await db.collection('messages').get()).size;
         await ctx.reply(`عدد المستخدمين الكلي: ${totalUsers}\nعدد المستخدمين اليومي: ${dailyUsers}\nعدد الأزرار: ${totalButtons}\nعدد الرسائل: ${totalMessages}`);
         return;
       case 'إرسال رسالة جماعية':
@@ -402,12 +427,12 @@ bot.on('text', async (ctx) => {
     if (state === 'EDITING_BUTTONS' && isAdmin) {
       // Show inline for edit
       const inlineKb = [
-        [Markup.button.callback('تعديل اسم', `btn_rename_${buttonId}`)],
-        [Markup.button.callback('حذف', `btn_delete_${buttonId}`)],
-        [Markup.button.callback('تحريك يمين', `btn_right_${buttonId}`), Markup.button.callback('تحريك يسار', `btn_left_${buttonId}`)],
-        [Markup.button.callback('تحريك أعلى', `btn_up_${buttonId}`), Markup.button.callback('تحريك أسفل', `btn_down_${buttonId}`)],
-        [Markup.button.callback('جعل للمشرفين فقط', `btn_adminonly_${buttonId}`)],
-        [Markup.button.callback('إحصائيات', `btn_stats_${buttonId}`)]
+        [Markup.button.callback('تعديل اسم', 'btn_rename_' + buttonId)],
+        [Markup.button.callback('حذف', 'btn_delete_' + buttonId)],
+        [Markup.button.callback('تحريك يمين', 'btn_right_' + buttonId), Markup.button.callback('تحريك يسار', 'btn_left_' + buttonId)],
+        [Markup.button.callback('تحريك أعلى', 'btn_up_' + buttonId), Markup.button.callback('تحريك أسفل', 'btn_down_' + buttonId)],
+        [Markup.button.callback('جعل للمشرفين فقط', 'btn_adminonly_' + buttonId)],
+        [Markup.button.callback('إحصائيات', 'btn_stats_' + buttonId)]
       ];
       await ctx.reply(`خيارات للزر ${text}:`, Markup.inlineKeyboard(inlineKb));
       return;
@@ -416,27 +441,12 @@ bot.on('text', async (ctx) => {
     await updateButtonStats(buttonId);
 
     const subButtons = await db.collection('buttons').where('parentId', '==', buttonId).get();
-    const newPath = subButtons.empty ? buttonId : buttonId;
-    await userRef.update({ currentPath: newPath });
-    await sendButtonMessages(ctx, buttonId);
-    await ctx.reply('اختر:', Markup.keyboard(await generateKeyboard(userId)).resize());
-    return;
-  }
-
-  // If in EDITING_CONTENT and text not button, add as text message
-  if (state === 'EDITING_CONTENT' && isAdmin) {
-    const buttonId = currentPath;
-    const messages = await db.collection('messages').where('buttonId', '==', buttonId).get();
-    const newOrder = messages.size;
-    await db.collection('messages').doc().set({
-      buttonId,
-      type: 'text',
-      content: text,
-      caption: '',
-      order: newOrder
-    });
-    await ctx.reply('تم إضافة النص.');
-    await sendButtonMessages(ctx, buttonId, true);
+    if (!subButtons.empty) {
+      await userRef.update({ currentPath: buttonId });
+      await ctx.reply('اختر:', Markup.keyboard(await generateKeyboard(userId)).resize());
+    } else {
+      await sendButtonMessages(ctx, buttonId);
+    }
     return;
   }
 });
@@ -445,9 +455,9 @@ bot.on(['photo', 'video', 'document'], async (ctx) => {
   const userId = String(ctx.from.id);
   const userRef = db.collection('users').doc(userId);
   const userDoc = await userRef.get();
-  const { state, isAdmin, currentPath } = userDoc.data();
+  const { state, isAdmin, currentPath, stateData } = userDoc.data();
 
-  if (state === 'EDITING_CONTENT' && isAdmin) {
+  if (isAdmin && (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT' || state === 'AWAITING_MESSAGE_EDIT')) {
     let type, fileId, caption = ctx.message.caption || '';
     if (ctx.message.photo) {
       type = 'photo';
@@ -461,17 +471,39 @@ bot.on(['photo', 'video', 'document'], async (ctx) => {
     }
 
     const buttonId = currentPath;
-    const messages = await db.collection('messages').where('buttonId', '==', buttonId).get();
-    const newOrder = messages.size;
-    await db.collection('messages').doc().set({
-      buttonId,
-      type,
-      fileId,
-      caption,
-      order: newOrder
-    });
-    await ctx.reply('تم إضافة المحتوى.');
-    await sendButtonMessages(ctx, buttonId, true);
+    if (state === 'AWAITING_MESSAGE_EDIT') {
+      await db.collection('messages').doc(stateData.messageId).update({
+        type,
+        fileId,
+        caption
+      });
+      await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+      await ctx.reply('تم تعديل الرسالة.');
+      await sendButtonMessages(ctx, buttonId, true);
+    } else {
+      const messages = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
+      let newOrder = messages.size;
+      if (state === 'AWAITING_NEW_MESSAGE_NEXT') {
+        const targetOrder = stateData.targetOrder;
+        for (const doc of messages.docs) {
+          const m = doc.data();
+          if (m.order > targetOrder) {
+            await doc.ref.update({ order: m.order + 1 });
+          }
+        }
+        newOrder = targetOrder + 1;
+      }
+      await db.collection('messages').doc().set({
+        buttonId,
+        type,
+        fileId,
+        caption,
+        order: newOrder
+      });
+      await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+      await ctx.reply('تم إضافة المحتوى.');
+      await sendButtonMessages(ctx, buttonId, true);
+    }
     return;
   }
 });
@@ -501,22 +533,23 @@ bot.on('callback_query', async (ctx) => {
   const data = ctx.callbackQuery.data;
   const parts = data.split('_');
   const action = parts[0];
-  const targetId = parts[1];
+  const subAction = parts[1] || '';
+  const targetId = parts[2] || '';
 
   const userRef = db.collection('users').doc(userId);
   const userDoc = await userRef.get();
   const { isAdmin, currentPath, state } = userDoc.data();
 
-  if (!isAdmin) return;
+  if (!isAdmin) return ctx.answerCbQuery('غير مصرح لك.');
 
   if (action === 'admin') {
-    if (targetId === 'add') {
+    if (subAction === 'add') {
       await userRef.update({ state: 'AWAITING_ADMIN_ADD' });
       await ctx.answerCbQuery();
       await ctx.editMessageText('أدخل ID المشرف الجديد:');
       return;
     }
-    if (targetId === 'remove') {
+    if (subAction === 'remove') {
       await userRef.update({ state: 'AWAITING_ADMIN_REMOVE' });
       await ctx.answerCbQuery();
       await ctx.editMessageText('أدخل ID المشرف لحذفه:');
@@ -525,44 +558,35 @@ bot.on('callback_query', async (ctx) => {
   }
 
   if (action === 'btn') {
-    const buttonId = targetId; // Wait, parts[0]='btn', parts[1]='rename', parts[2]=id
-    // Fix: const actionType = parts[1];
-    // const buttonId = parts[2];
-    // But in code, data = `btn_rename_${buttonId}`, so parts = ['btn', 'rename', buttonId]
-    // No, in reply data `btn_rename_${buttonId}`, split('_') = ['btn', 'rename', buttonId]
-
-    const realAction = parts[1];
-    const realButtonId = parts[2];
-
-    if (realAction === 'rename') {
-      await userRef.update({ state: 'AWAITING_BUTTON_RENAME', stateData: { buttonId: realButtonId } });
+    if (subAction === 'rename') {
+      await userRef.update({ state: 'AWAITING_BUTTON_RENAME', stateData: { buttonId: targetId } });
       await ctx.answerCbQuery();
       await ctx.reply('أدخل الاسم الجديد:');
       return;
     }
 
-    if (realAction === 'delete') {
-      await recursiveDeleteButton(realButtonId);
+    if (subAction === 'delete') {
+      await recursiveDeleteButton(targetId);
       await ctx.answerCbQuery('تم الحذف');
       await ctx.reply('تم حذف الزر.', Markup.keyboard(await generateKeyboard(userId)).resize());
       return;
     }
 
-    if (['up', 'down', 'left', 'right'].includes(realAction)) {
-      const buttons = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
-      const buttonList = buttons.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const index = buttonList.findIndex(b => b.id === realButtonId);
-      if (index === -1) return;
+    if (['up', 'down', 'left', 'right'].includes(subAction)) {
+      const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
+      const buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const index = buttonList.findIndex(b => b.id === targetId);
+      if (index === -1) return ctx.answerCbQuery('خطأ');
 
       let swapIndex = -1;
-      if (realAction === 'up' && index > 0) swapIndex = index - 1;
-      if (realAction === 'down' && index < buttonList.length - 1) swapIndex = index + 1;
-      if (realAction === 'left' && index > 0 && index % 2 === 1) swapIndex = index - 1;
-      if (realAction === 'right' && index < buttonList.length - 1 && index % 2 === 0) swapIndex = index + 1;
+      if (subAction === 'up' && index > 0) swapIndex = index - 1;
+      if (subAction === 'down' && index < buttonList.length - 1) swapIndex = index + 1;
+      if (subAction === 'left' && index > 0 && index % 2 === 1) swapIndex = index - 1;
+      if (subAction === 'right' && index < buttonList.length - 1 && index % 2 === 0) swapIndex = index + 1;
 
       if (swapIndex !== -1) {
         const tempOrder = buttonList[index].order;
-        await db.collection('buttons').doc(realButtonId).update({ order: buttonList[swapIndex].order });
+        await db.collection('buttons').doc(targetId).update({ order: buttonList[swapIndex].order });
         await db.collection('buttons').doc(buttonList[swapIndex].id).update({ order: tempOrder });
         await ctx.answerCbQuery('تم التحريك');
         await ctx.reply('تم التحريك.', Markup.keyboard(await generateKeyboard(userId)).resize());
@@ -572,17 +596,17 @@ bot.on('callback_query', async (ctx) => {
       return;
     }
 
-    if (realAction === 'adminonly') {
-      const buttonDoc = await db.collection('buttons').doc(realButtonId).get();
+    if (subAction === 'adminonly') {
+      const buttonDoc = await db.collection('buttons').doc(targetId).get();
       const adminOnly = !buttonDoc.data().adminOnly;
-      await db.collection('buttons').doc(realButtonId).update({ adminOnly });
+      await db.collection('buttons').doc(targetId).update({ adminOnly });
       await ctx.answerCbQuery(`الزر الآن ${adminOnly ? 'للمشرفين فقط' : 'للجميع'}`);
       await ctx.reply('تم التعديل.', Markup.keyboard(await generateKeyboard(userId)).resize());
       return;
     }
 
-    if (realAction === 'stats') {
-      const buttonDoc = await db.collection('buttons').doc(realButtonId).get();
+    if (subAction === 'stats') {
+      const buttonDoc = await db.collection('buttons').doc(targetId).get();
       const stats = buttonDoc.data().stats || { totalClicks: 0, dailyClicks: 0 };
       await ctx.reply(`ضغطات اليوم: ${stats.dailyClicks}\nضغطات كلية: ${stats.totalClicks}`);
       await ctx.answerCbQuery();
@@ -591,36 +615,33 @@ bot.on('callback_query', async (ctx) => {
   }
 
   if (action === 'msg') {
-    const realAction = parts[1];
-    const realMessageId = parts[2];
-
-    if (realAction === 'delete') {
-      await db.collection('messages').doc(realMessageId).delete();
+    if (subAction === 'delete') {
+      await db.collection('messages').doc(targetId).delete();
       await ctx.answerCbQuery('تم الحذف');
       await sendButtonMessages(ctx, currentPath, true);
       return;
     }
 
-    if (realAction === 'edit') {
-      await userRef.update({ state: 'AWAITING_MESSAGE_EDIT', stateData: { messageId: realMessageId } });
+    if (subAction === 'edit') {
+      await userRef.update({ state: 'AWAITING_MESSAGE_EDIT', stateData: { messageId: targetId } });
       await ctx.answerCbQuery();
-      await ctx.reply('أدخل الشرح الجديد أو المحتوى:');
+      await ctx.reply('أرسل المحتوى الجديد أو الشرح الجديد:');
       return;
     }
 
-    if (realAction === 'up' || realAction === 'down') {
-      const messages = await db.collection('messages').where('buttonId', '==', currentPath).orderBy('order').get();
-      const messageList = messages.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const index = messageList.findIndex(m => m.id === realMessageId);
-      if (index === -1) return;
+    if (subAction === 'up' || subAction === 'down') {
+      const messagesSnapshot = await db.collection('messages').where('buttonId', '==', currentPath).orderBy('order').get();
+      const messageList = messagesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const index = messageList.findIndex(m => m.id === targetId);
+      if (index === -1) return ctx.answerCbQuery('خطأ');
 
       let swapIndex = -1;
-      if (realAction === 'up' && index > 0) swapIndex = index - 1;
-      if (realAction === 'down' && index < messageList.length - 1) swapIndex = index + 1;
+      if (subAction === 'up' && index > 0) swapIndex = index - 1;
+      if (subAction === 'down' && index < messageList.length - 1) swapIndex = index + 1;
 
       if (swapIndex !== -1) {
         const tempOrder = messageList[index].order;
-        await db.collection('messages').doc(realMessageId).update({ order: messageList[swapIndex].order });
+        await db.collection('messages').doc(targetId).update({ order: messageList[swapIndex].order });
         await db.collection('messages').doc(messageList[swapIndex].id).update({ order: tempOrder });
         await ctx.answerCbQuery('تم التحريك');
         await sendButtonMessages(ctx, currentPath, true);
@@ -628,12 +649,12 @@ bot.on('callback_query', async (ctx) => {
       return;
     }
 
-    if (realAction === 'addnext') {
-      const messages = await db.collection('messages').where('buttonId', '==', currentPath).orderBy('order').get();
-      const messageList = messages.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const msg = messageList.find(m => m.id === realMessageId);
-      if (msg) {
-        await userRef.update({ state: 'AWAITING_NEW_MESSAGE_NEXT', stateData: { targetOrder: msg.order } });
+    if (subAction === 'addnext') {
+      const messagesSnapshot = await db.collection('messages').where('buttonId', '==', currentPath).orderBy('order').get();
+      const messageList = messagesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const msgIndex = messageList.findIndex(m => m.id === targetId);
+      if (msgIndex !== -1) {
+        await userRef.update({ state: 'AWAITING_NEW_MESSAGE_NEXT', stateData: { targetOrder: messageList[msgIndex].order } });
         await ctx.answerCbQuery();
         await ctx.reply('أرسل الرسالة التالية:');
       }
@@ -641,6 +662,11 @@ bot.on('callback_query', async (ctx) => {
     }
   }
 });
+
+async function getMessages(buttonId) {
+  const msgsSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
+  return msgsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
 
 // --- 9. إعداد Vercel Webhook ---
 module.exports = async (req, res) => {
