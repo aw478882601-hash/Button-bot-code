@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V18 - COMPLETE & STABLE CODE      |
+// |   TELEGRAM FIREBASE BOT - V20 - FINAL COMPLETE VERSION      |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -30,15 +30,23 @@ async function generateKeyboard(userId) {
   try {
     const userDoc = await db.collection('users').doc(String(userId)).get();
     if (!userDoc.exists) return [[]];
+
     const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userDoc.data();
+    
     let keyboardRows = [];
 
     if (currentPath === 'supervision') {
-        keyboardRows = [['📊 الإحصائيات', '🗣️ رسالة جماعية'], ['⚙️ تعديل المشرفين', '📝 تعديل رسالة الترحيب'], ['🚫 قائمة المحظورين'], ['🔙 رجوع', '🔝 القائمة الرئيسية']];
+        keyboardRows = [
+            ['📊 الإحصائيات', '🗣️ رسالة جماعية'],
+            ['⚙️ تعديل المشرفين', '📝 تعديل رسالة الترحيب'],
+            ['🚫 قائمة المحظورين'],
+            ['🔙 رجوع', '🔝 القائمة الرئيسية']
+        ];
         return keyboardRows;
     }
 
     const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
+
     let currentRow = [];
     buttonsSnapshot.forEach(doc => {
       const button = doc.data();
@@ -57,9 +65,14 @@ async function generateKeyboard(userId) {
     }
     
     const fixedButtons = [];
-    if (currentPath !== 'root') fixedButtons.push('🔙 رجوع');
+    if (currentPath !== 'root') {
+      fixedButtons.push('🔙 رجوع');
+    }
     fixedButtons.push('🔝 القائمة الرئيسية');
-    if (isAdmin && currentPath === 'root') fixedButtons.push('👑 الإشراف');
+    
+    if (isAdmin && currentPath === 'root') {
+      fixedButtons.push('👑 الإشراف');
+    }
     if (fixedButtons.length > 0) keyboardRows.push(fixedButtons);
     
     if (isAdmin) {
@@ -72,63 +85,91 @@ async function generateKeyboard(userId) {
     keyboardRows.push(['💬 التواصل مع الإدارة']);
     return keyboardRows;
   } catch (error) {
-    console.error('Error in generateKeyboard:', error);
+    console.error('Error generating keyboard:', error);
     return [['حدث خطأ في عرض الأزرار']];
   }
 }
 
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     const messagesSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
-    if (messagesSnapshot.empty && !inEditMode) return;
+    
+    if (messagesSnapshot.empty && inEditMode) {
+        await ctx.reply('لا يوجد محتوى لعرضه في هذا القسم حاليًا.');
+    }
 
     for (const doc of messagesSnapshot.docs) {
         const message = doc.data();
         const messageId = doc.id;
+        
         let inlineKeyboard = [];
         if (inEditMode) {
             inlineKeyboard = [[
-                Markup.button.callback('🔼', `msg:up:${messageId}`), Markup.button.callback('🔽', `msg:down:${messageId}`),
-                Markup.button.callback('✏️', `msg:edit:${messageId}`), Markup.button.callback('➕', `msg:addnext:${messageId}`),
+                Markup.button.callback('🔼', `msg:up:${messageId}`),
+                Markup.button.callback('🔽', `msg:down:${messageId}`),
+                Markup.button.callback('✏️', `msg:edit:${messageId}`),
+                Markup.button.callback('➕', `msg:addnext:${messageId}`),
                 Markup.button.callback('🗑️', `msg:delete:${messageId}`),
             ]];
         }
-        const options = { caption: message.caption || '', parse_mode: 'HTML', reply_markup: inEditMode && inlineKeyboard.length > 0 ? { inline_keyboard: inlineKeyboard } : undefined };
+
+        const options = { 
+            caption: message.caption || '',
+            parse_mode: 'HTML',
+            reply_markup: inEditMode && inlineKeyboard.length > 0 ? { inline_keyboard: inlineKeyboard } : undefined
+        };
+
         try {
             switch (message.type) {
-                case 'text': await ctx.reply(message.content, options); break;
+                case 'text':
+                    await ctx.reply(message.content, options); 
+                    break;
                 case 'photo': await ctx.replyWithPhoto(message.content, options); break;
                 case 'video': await ctx.replyWithVideo(message.content, options); break;
                 case 'document': await ctx.replyWithDocument(message.content, options); break;
             }
-        } catch (e) { console.error(`Failed to send message (type: ${message.type}, id: ${messageId}) with file_id: ${message.content}`, e.message); }
+        } catch (e) { console.error(`Failed to send message ID ${messageId} (type: ${message.type}) with file_id: ${message.content}`, e.message); }
     }
 }
 
 async function updateButtonStats(buttonId, userId) {
     const today = new Date().toISOString().split('T')[0];
     const buttonRef = db.collection('buttons').doc(buttonId);
+
     try {
         await db.runTransaction(async (transaction) => {
             const buttonDoc = await transaction.get(buttonRef);
             if (!buttonDoc.exists) return;
+
             let stats = buttonDoc.data().stats || {};
+
             let totalUsers = stats.totalUsers || [];
-            if (!totalUsers.includes(userId)) totalUsers.push(userId);
+            if (!totalUsers.includes(userId)) {
+                totalUsers.push(userId);
+            }
+            
             let dailyUsers = stats.dailyUsers || {};
             dailyUsers[today] = dailyUsers[today] || [];
-            if (!dailyUsers[today].includes(userId)) dailyUsers[today].push(userId);
+            if (!dailyUsers[today].includes(userId)) {
+                dailyUsers[today].push(userId);
+            }
+
             transaction.update(buttonRef, {
                 'stats.totalClicks': admin.firestore.FieldValue.increment(1),
                 [`stats.dailyClicks.${today}`]: admin.firestore.FieldValue.increment(1),
-                'stats.totalUsers': totalUsers, 'stats.dailyUsers': dailyUsers
+                'stats.totalUsers': totalUsers,
+                'stats.dailyUsers': dailyUsers
             });
         });
-    } catch (e) { console.error(`Button stats transaction failed for button ${buttonId}:`, e); }
+    } catch (e) {
+        console.error(`Button stats transaction failed for button ${buttonId}:`, e);
+    }
 }
 
 async function recursiveDeleteButton(buttonId) {
     const subButtons = await db.collection('buttons').where('parentId', '==', buttonId).get();
-    for (const sub of subButtons.docs) await recursiveDeleteButton(sub.id);
+    for (const sub of subButtons.docs) {
+        await recursiveDeleteButton(sub.id);
+    }
     const messages = await db.collection('messages').where('buttonId', '==', buttonId).get();
     const batch = db.batch();
     messages.forEach(doc => batch.delete(doc.ref));
@@ -143,15 +184,22 @@ async function recursiveDeleteButton(buttonId) {
 bot.start(async (ctx) => {
     try {
         const userId = String(ctx.from.id);
+        const today = new Date().toISOString().split('T')[0];
         const userRef = db.collection('users').doc(userId);
         const userDoc = await userRef.get();
+
         const adminsDoc = await db.collection('config').doc('admins').get();
         const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
+        
         const isSuperAdmin = userId === process.env.SUPER_ADMIN_ID;
         const isAdmin = adminIds.includes(userId) || isSuperAdmin;
 
         if (!userDoc.exists) {
-            await userRef.set({ chatId: ctx.chat.id, isAdmin, currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: new Date().toISOString().split('T')[0], banned: false });
+            await userRef.set({
+                chatId: ctx.chat.id, isAdmin, currentPath: 'root',
+                state: 'NORMAL', stateData: {}, lastActive: today, banned: false
+            });
+            
             if (adminIds.length > 0) {
                 const userName = `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim();
                 const userLink = `tg://user?id=${userId}`;
@@ -162,11 +210,14 @@ bot.start(async (ctx) => {
                     } catch (e) { console.error(`Failed to send new user notification to admin ${adminId}:`, e.message); }
                 }
             }
+
         } else {
-            await userRef.update({ currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: new Date().toISOString().split('T')[0], isAdmin });
+            await userRef.update({ currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: today, isAdmin });
         }
+
         const settingsDoc = await db.collection('config').doc('settings').get();
         const welcomeMessage = (settingsDoc.exists && settingsDoc.data().welcomeMessage) ? settingsDoc.data().welcomeMessage : 'أهلاً بك في البوت!';
+        
         await ctx.reply(welcomeMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
     } catch (error) {
         console.error("FATAL ERROR in bot.start:", error);
@@ -180,14 +231,17 @@ const mainMessageHandler = async (ctx) => {
         const userRef = db.collection('users').doc(userId);
         const userDoc = await userRef.get();
         if (!userDoc.exists) return bot.start(ctx);
+
         let { currentPath, state, isAdmin, stateData, banned } = userDoc.data();
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
-        await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
         
-        // --- 1. HANDLE STATE-BASED INPUT (Awaiting user input for a specific task) ---
-        if (state !== 'NORMAL') {
+        await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
+
+        // --- SECTION 1: Handle states that await specific user input ---
+        // These states override any button clicks as the bot is waiting for a direct reply.
+        if (state.startsWith('AWAITING_') || state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
             if (isAdmin) {
-                if (ctx.message.text) {
+                if (ctx.message && ctx.message.text) {
                     const text = ctx.message.text;
                     switch (state) {
                         case 'AWAITING_NEW_BUTTON_NAME':
@@ -223,22 +277,6 @@ const mainMessageHandler = async (ctx) => {
                             await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
                             await ctx.reply('✅ تم تعديل الرسالة النصية.');
                             return sendButtonMessages(ctx, stateData.buttonId, true);
-                        case 'AWAITING_NEW_MESSAGE':
-                        case 'AWAITING_NEW_MESSAGE_NEXT':
-                            const buttonId = stateData.buttonId;
-                            const messages = (await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get()).docs.map(d => ({id: d.id, ...d.data()}));
-                            let newMsgOrder = messages.length;
-                            if (state === 'AWAITING_NEW_MESSAGE_NEXT') {
-                                const targetOrder = stateData.targetOrder;
-                                const batch = db.batch();
-                                messages.filter(m => m.order >= targetOrder).forEach(m => batch.update(db.collection('messages').doc(m.id), { order: m.order + 1 }));
-                                await batch.commit();
-                                newMsgOrder = targetOrder;
-                            }
-                            await db.collection('messages').add({ buttonId, type: 'text', content: text, caption: '', order: newMsgOrder });
-                            await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                            await ctx.reply('✅ تم إضافة النص.');
-                            return sendButtonMessages(ctx, buttonId, true);
                         case 'AWAITING_BROADCAST':
                             const users = await db.collection('users').get();
                             let successCount = 0, errorCount = 0;
@@ -263,7 +301,27 @@ const mainMessageHandler = async (ctx) => {
                             return;
                     }
                 }
-                if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT' || state === 'AWAITING_MSG_CAPTION') {
+                
+                // Handle text for adding a new message
+                if ((state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT') && ctx.message && ctx.message.text) {
+                    const buttonId = stateData.buttonId;
+                    const messages = (await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get()).docs.map(d => ({id: d.id, ...d.data()}));
+                    let newMsgOrder = messages.length;
+                    if (state === 'AWAITING_NEW_MESSAGE_NEXT') {
+                        const targetOrder = stateData.targetOrder;
+                        const batch = db.batch();
+                        messages.filter(m => m.order >= targetOrder).forEach(m => batch.update(db.collection('messages').doc(m.id), { order: m.order + 1 }));
+                        await batch.commit();
+                        newMsgOrder = targetOrder;
+                    }
+                    await db.collection('messages').add({ buttonId, type: 'text', content: ctx.message.text, caption: '', order: newMsgOrder });
+                    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                    await ctx.reply('✅ تم إضافة النص.');
+                    return sendButtonMessages(ctx, buttonId, true);
+                }
+
+                // Handle media for adding/editing messages
+                if ((state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT' || state === 'AWAITING_MSG_CAPTION') && !ctx.message.text) {
                     let type, fileId, caption = ctx.message.caption || '';
                     if (ctx.message.photo) { type = 'photo'; fileId = ctx.message.photo.pop().file_id; } 
                     else if (ctx.message.video) { type = 'video'; fileId = ctx.message.video.file_id; } 
@@ -293,6 +351,8 @@ const mainMessageHandler = async (ctx) => {
                     }
                 }
             }
+
+            // Handle user contacting admin
             if(state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
                  const adminsDoc = await db.collection('config').doc('admins').get();
                  const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
@@ -326,91 +386,100 @@ const mainMessageHandler = async (ctx) => {
                  await userRef.update({ state: 'NORMAL' });
                  return ctx.reply('✅ تم إرسال رسالتك إلى الإدارة بنجاح.');
             }
-            return;
+            return; // Exit after handling the state.
         }
+        
+        // --- SECTION 2: Handle button clicks and regular messages (State is NORMAL, EDITING_BUTTONS, or EDITING_CONTENT) ---
+        if (!ctx.message || !ctx.message.text) return; // Ignore non-text messages if not in an awaiting state
+        
+        const text = ctx.message.text;
 
-        // --- 2. HANDLE FIXED KEYBOARD BUTTONS & CLICKS in NORMAL STATE ---
-        if (ctx.message && ctx.message.text) {
-            const text = ctx.message.text;
-            switch (text) {
-                case '🔝 القائمة الرئيسية':
-                    await userRef.update({ currentPath: 'root', state: 'NORMAL', stateData: {} });
-                    return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
-                case '🔙 رجوع':
-                    if (currentPath === 'root') return;
-                    const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
-                    await userRef.update({ currentPath: newPath, stateData: {} });
-                    return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                case '💬 التواصل مع الإدارة':
-                    await userRef.update({ state: 'CONTACTING_ADMIN' });
-                    return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)...');
-                case '👑 الإشراف':
-                    if (isAdmin && currentPath === 'root') {
-                        await userRef.update({ currentPath: 'supervision' });
-                        return ctx.reply('قائمة الإشراف', Markup.keyboard(await generateKeyboard(userId)).resize());
-                    }
-                    break;
-                case '✏️ تعديل الأزرار':
-                case '🚫 إلغاء تعديل الأزرار':
-                    if (isAdmin) {
-                        const newState = state === 'EDITING_BUTTONS' ? 'NORMAL' : 'EDITING_BUTTONS';
-                        await userRef.update({ state: newState, stateData: {} });
-                        return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                    }
-                    break;
-                case '📄 تعديل المحتوى':
-                case '🚫 إلغاء تعديل المحتوى':
-                    if (isAdmin) {
-                        const newContentState = state === 'EDITING_CONTENT' ? 'NORMAL' : 'EDITING_CONTENT';
-                        await userRef.update({ state: newContentState, stateData: {} });
-                        await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                        if (newContentState === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
-                            await sendButtonMessages(ctx, currentPath.split('/').pop(), true);
-                        }
-                        return;
-                    }
-                    break;
-                case '➕ إضافة زر':
-                    if (isAdmin && state === 'EDITING_BUTTONS') {
-                        await userRef.update({ state: 'AWAITING_NEW_BUTTON_NAME' });
-                        return ctx.reply('أدخل اسم الزر الجديد:');
-                    }
-                    break;
-                case '➕ إضافة رسالة':
-                    if (isAdmin && state === 'EDITING_CONTENT') {
-                        await userRef.update({ state: 'AWAITING_NEW_MESSAGE', stateData: { buttonId: currentPath.split('/').pop() } });
-                        return ctx.reply('أرسل الرسالة الجديدة (نص، صورة، فيديو، ملف).');
-                    }
-                    break;
-            }
-
-            // --- 3. HANDLE DYNAMIC BUTTON CLICKS (FINALIZED LOGIC) ---
-            const buttonSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).limit(1).get();
-            if (buttonSnapshot.empty) return;
-
-            const buttonDoc = buttonSnapshot.docs[0];
-            const buttonId = buttonDoc.id;
-
-            if (state === 'EDITING_BUTTONS' && isAdmin) {
-                if (stateData && stateData.lastClickedButtonId === buttonId) {
-                    await userRef.update({ currentPath: `${currentPath}/${buttonId}`, stateData: {} });
-                    return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                } else {
-                    await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
-                    const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`)], [Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`)], [Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`)], [Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`)]];
-                    return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
+        // --- Handle fixed menu buttons ---
+        switch (text) {
+            case '🔝 القائمة الرئيسية':
+                await userRef.update({ currentPath: 'root', state: 'NORMAL' });
+                return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
+            case '🔙 رجوع':
+                const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
+                await userRef.update({ currentPath: newPath });
+                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
+            case '💬 التواصل مع الإدارة':
+                await userRef.update({ state: 'CONTACTING_ADMIN' });
+                return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)...');
+            case '👑 الإشراف':
+                if (isAdmin && currentPath === 'root') {
+                    await userRef.update({ currentPath: 'supervision' });
+                    return ctx.reply('قائمة الإشراف', Markup.keyboard(await generateKeyboard(userId)).resize());
                 }
-            }
-            await updateButtonStats(buttonId, userId);
-            const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', buttonId).limit(1).get();
-            if (!subButtonsSnapshot.empty) {
-                await userRef.update({ currentPath: `${currentPath}/${buttonId}` });
-                await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
+                break;
+            case '✏️ تعديل الأزرار':
+            case '🚫 إلغاء تعديل الأزرار':
+                if (isAdmin) {
+                    const newState = state === 'EDITING_BUTTONS' ? 'NORMAL' : 'EDITING_BUTTONS';
+                    await userRef.update({ state: newState });
+                    return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                }
+                break;
+            case '📄 تعديل المحتوى':
+            case '🚫 إلغاء تعديل المحتوى':
+                if (isAdmin) {
+                    const newContentState = state === 'EDITING_CONTENT' ? 'NORMAL' : 'EDITING_CONTENT';
+                    await userRef.update({ state: newContentState });
+                    await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                    if (newContentState === 'EDITING_CONTENT' && currentPath !== 'root' && currentPath !== 'supervision') {
+                        await sendButtonMessages(ctx, currentPath.split('/').pop(), true);
+                    }
+                    return;
+                }
+                break;
+            case '➕ إضافة زر':
+                if (isAdmin && state === 'EDITING_BUTTONS') {
+                    await userRef.update({ state: 'AWAITING_NEW_BUTTON_NAME' });
+                    return ctx.reply('أدخل اسم الزر الجديد:');
+                }
+                break;
+            case '➕ إضافة رسالة':
+                if (isAdmin && state === 'EDITING_CONTENT' && currentPath !== 'root' && currentPath !== 'supervision') {
+                    await userRef.update({ state: 'AWAITING_NEW_MESSAGE', stateData: { buttonId: currentPath.split('/').pop() } });
+                    return ctx.reply('أرسل الرسالة الجديدة.');
+                }
+                break;
+        }
+
+        // --- Handle dynamic button clicks ---
+        const buttonSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).limit(1).get();
+        if (buttonSnapshot.empty) return;
+
+        const buttonDoc = buttonSnapshot.docs[0];
+        const buttonId = buttonDoc.id;
+
+        if (state === 'EDITING_BUTTONS' && isAdmin) {
+            if (stateData && stateData.lastClickedButtonId === buttonId) {
+                await userRef.update({ currentPath: `${currentPath}/${buttonId}`, stateData: {} });
+                return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
-                await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
+                await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
+                const inlineKb = [
+                    [Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`)],
+                    [Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`)],
+                    [Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`)],
+                    [Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`)]
+                ];
+                return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
         }
+        
+        await updateButtonStats(buttonId, userId);
+        const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', buttonId).limit(1).get();
+
+        if (!subButtonsSnapshot.empty) {
+            await userRef.update({ currentPath: `${currentPath}/${buttonId}` });
+            await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
+        } else {
+            await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
+        }
+
     } catch (error) {
         console.error("FATAL ERROR in mainMessageHandler:", error);
         console.error("Caused by update:", JSON.stringify(ctx.update, null, 2));
@@ -587,20 +656,15 @@ bot.on('callback_query', async (ctx) => {
 // --- Vercel Webhook Setup ---
 module.exports = async (req, res) => {
     try {
-        // تأكد من أن الطلب هو POST وأنه يحتوي على بيانات
         if (req.method === 'POST' && req.body) {
-            // اسمح لـ Telegraf بمعالجة الطلب والرد بنفسه
-            // لا نكتب أي كود لإرسال رد هنا
             await bot.handleUpdate(req.body, res);
         } else {
-            // إذا كان الطلب من نوع آخر (مثل زيارة من متصفح) أرسل ردًا بسيطًا
-            res.status(200).send('Bot is running and ready for Telegram updates.');
+            res.status(200).send('Bot is running.');
         }
     } catch (err) {
         console.error('Error in webhook handler:', err.message);
-        // في حالة حدوث خطأ، تأكد من إرسال رد واحد فقط
         if (!res.headersSent) {
-            res.status(500).send('An internal server error occurred.');
+            res.status(500).send('Internal server error.');
         }
     }
 };
