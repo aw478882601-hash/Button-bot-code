@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V14 - FINAL & FULLY FEATURED        |
+// |   TELEGRAM FIREBASE BOT - V15 - FINAL, FULLY FEATURED & FIXED |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -239,7 +239,6 @@ const mainMessageHandler = async (ctx) => {
 
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
 
-        // --- State-based input handling ---
         if (isAdmin) {
             if (ctx.message.text) {
                 const text = ctx.message.text;
@@ -526,15 +525,26 @@ const mainMessageHandler = async (ctx) => {
 
                 await updateButtonStats(buttonId, userId);
                 
-                const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', buttonId).limit(1).get();
-
-                if (subButtonsSnapshot.empty) {
-                    await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
-                } else {
+                // **MODIFIED**: New navigation logic
+                if (state === 'EDITING_CONTENT' && isAdmin) {
+                    // In content edit mode, always navigate in
                     const newPath = `${currentPath}/${buttonId}`;
-                    await userRef.update({ currentPath: newPath, stateData: {} });
-                    await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                    await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
+                    await userRef.update({ currentPath: newPath });
+                    await ctx.reply(`دخلت "${text}" لتعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                    await sendButtonMessages(ctx, buttonId, true);
+                } else {
+                    // In normal mode, check for sub-buttons
+                    const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', buttonId).limit(1).get();
+                    if (!subButtonsSnapshot.empty) {
+                        // It's a folder, navigate in
+                        const newPath = `${currentPath}/${buttonId}`;
+                        await userRef.update({ currentPath: newPath });
+                        await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                        await sendButtonMessages(ctx, buttonId, false);
+                    } else {
+                        // It's a leaf button, just show content
+                        await sendButtonMessages(ctx, buttonId, false);
+                    }
                 }
             }
         }
@@ -556,15 +566,16 @@ bot.on('callback_query', async (ctx) => {
         const userDoc = await userRef.get();
         if (!userDoc.exists) return ctx.answerCbQuery('المستخدم غير موجود.');
 
-        const { isAdmin, currentPath } = userDoc.data();
-
+        // User action: reply to admin
         if (action === 'user' && subAction === 'reply') {
             await userRef.update({ state: 'CONTACTING_ADMIN' });
             await ctx.answerCbQuery();
             return ctx.reply('أرسل الآن ردك على رسالة المشرف:');
         }
         
-        if (!isAdmin) return ctx.answerCbQuery('غير مصرح لك.');
+        if (!userDoc.data().isAdmin) return ctx.answerCbQuery('غير مصرح لك.');
+        
+        const { currentPath } = userDoc.data();
 
         if (action === 'admin') {
             if (subAction === 'reply') {
@@ -613,10 +624,10 @@ bot.on('callback_query', async (ctx) => {
                 if (index === -1) return ctx.answerCbQuery('خطأ في العثور على الزر');
 
                 let swapIndex = -1;
-                if (subAction === 'up' && index > 0) swapIndex = index - 1;
-                if (subAction === 'down' && index < buttonList.length - 1) swapIndex = index + 1;
-                if (subAction === 'left' && index > 0) swapIndex = index - 1;
-                if (subAction === 'right' && index < buttonList.length - 1) swapIndex = index + 1;
+                if (subAction === 'up' && index >= 2) swapIndex = index - 2;
+                if (subAction === 'down' && index <= buttonList.length - 3) swapIndex = index + 2;
+                if (subAction === 'left' && index % 2 === 1) swapIndex = index - 1;
+                if (subAction === 'right' && index % 2 === 0 && index < buttonList.length - 1) swapIndex = index + 1;
 
                 if (swapIndex !== -1) {
                     const batch = db.batch();
