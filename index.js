@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V13 - FINAL & FULLY FEATURED        |
+// |   TELEGRAM FIREBASE BOT - V14 - FINAL & FULLY FEATURED        |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -554,8 +554,17 @@ bot.on('callback_query', async (ctx) => {
 
         const userRef = db.collection('users').doc(userId);
         const userDoc = await userRef.get();
-        if (!userDoc.exists || !userDoc.data().isAdmin) return ctx.answerCbQuery('غير مصرح لك.');
-        const { currentPath } = userDoc.data();
+        if (!userDoc.exists) return ctx.answerCbQuery('المستخدم غير موجود.');
+
+        const { isAdmin, currentPath } = userDoc.data();
+
+        if (action === 'user' && subAction === 'reply') {
+            await userRef.update({ state: 'CONTACTING_ADMIN' });
+            await ctx.answerCbQuery();
+            return ctx.reply('أرسل الآن ردك على رسالة المشرف:');
+        }
+        
+        if (!isAdmin) return ctx.answerCbQuery('غير مصرح لك.');
 
         if (action === 'admin') {
             if (subAction === 'reply') {
@@ -604,8 +613,10 @@ bot.on('callback_query', async (ctx) => {
                 if (index === -1) return ctx.answerCbQuery('خطأ في العثور على الزر');
 
                 let swapIndex = -1;
-                if ((subAction === 'up' || subAction === 'left') && index > 0) swapIndex = index - 1;
-                if ((subAction === 'down' || subAction === 'right') && index < buttonList.length - 1) swapIndex = index + 1;
+                if (subAction === 'up' && index > 0) swapIndex = index - 1;
+                if (subAction === 'down' && index < buttonList.length - 1) swapIndex = index + 1;
+                if (subAction === 'left' && index > 0) swapIndex = index - 1;
+                if (subAction === 'right' && index < buttonList.length - 1) swapIndex = index + 1;
 
                 if (swapIndex !== -1) {
                     const batch = db.batch();
