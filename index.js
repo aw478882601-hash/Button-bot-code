@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V21 - FINAL STABLE VERSION        |
+// |   TELEGRAM FIREBASE BOT - V22 - FINAL WORKING VERSION       |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -507,23 +507,25 @@ const mainMessageHandler = async (ctx) => {
                 return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
-                const inlineKb = [
-                    [Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`)],
-                    [Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`)],
-                    [Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`)],
-                    [Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`)]
-                ];
+                const inlineKb = [[
+                    Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
+                    Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`),
+                    Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`),
+                    Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`),
+                ]];
                 return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
         }
         
         await updateButtonStats(buttonId, userId);
-        const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', buttonId).limit(1).get();
+        const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', buttonId).get();
 
-        if (!subButtonsSnapshot.empty) {
+        if (subButtonsSnapshot.size > 0) {
+            // It's a folder, navigate into it
             await userRef.update({ currentPath: `${currentPath}/${buttonId}` });
             await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
         } else {
+            // It's a leaf button, just show its content
             await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
         }
 
