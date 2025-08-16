@@ -1,5 +1,5 @@
 // =================================================================
-// |      TELEGRAM FIREBASE BOT - V6 - FULLY FUNCTIONAL & FIXED    |
+// |   TELEGRAM FIREBASE BOT - V7 - EMOJI INTERFACE & FINAL FIXES  |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -101,15 +101,14 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
         
         let inlineKeyboard = [];
         if (inEditMode) {
-            inlineKeyboard.push([
-                Markup.button.callback('🗑️ حذف', `msg:delete:${messageId}`),
-                Markup.button.callback('✏️ تعديل', `msg:edit:${messageId}`),
-            ]);
-            inlineKeyboard.push([
-                Markup.button.callback('🔼 للأعلى', `msg:up:${messageId}`),
-                Markup.button.callback('🔽 للأسفل', `msg:down:${messageId}`),
-            ]);
-            inlineKeyboard.push([Markup.button.callback('➕ إضافة تالية', `msg:addnext:${messageId}`)]);
+            // **MODIFIED**: Emojis in a single row
+            inlineKeyboard = [[
+                Markup.button.callback('🔼', `msg:up:${messageId}`),
+                Markup.button.callback('🔽', `msg:down:${messageId}`),
+                Markup.button.callback('✏️', `msg:edit:${messageId}`),
+                Markup.button.callback('➕', `msg:addnext:${messageId}`),
+                Markup.button.callback('🗑️', `msg:delete:${messageId}`),
+            ]];
         }
 
         const options = { 
@@ -224,7 +223,6 @@ const mainMessageHandler = async (ctx) => {
 
     // --- State-based input handling ---
     if (isAdmin) {
-        // Handle text input for states
         if (ctx.message.text) {
             const text = ctx.message.text;
             switch (state) {
@@ -259,7 +257,8 @@ const mainMessageHandler = async (ctx) => {
                 case 'AWAITING_MSG_CAPTION':
                     await db.collection('messages').doc(stateData.messageId).update({ caption: text });
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    return ctx.reply('✅ تم تعديل الشرح.');
+                    await ctx.reply('✅ تم تعديل الشرح.');
+                    return sendButtonMessages(ctx, stateData.buttonId, true);
 
                 case 'AWAITING_NEW_MESSAGE':
                 case 'AWAITING_NEW_MESSAGE_NEXT':
@@ -269,11 +268,11 @@ const mainMessageHandler = async (ctx) => {
                     if (state === 'AWAITING_NEW_MESSAGE_NEXT') {
                         const targetOrder = stateData.targetOrder;
                         const batch = db.batch();
-                        messages.filter(m => m.order > targetOrder).forEach(m => {
+                        messages.filter(m => m.order >= targetOrder).forEach(m => {
                             batch.update(db.collection('messages').doc(m.id), { order: m.order + 1 });
                         });
                         await batch.commit();
-                        newMsgOrder = targetOrder + 1;
+                        newMsgOrder = targetOrder;
                     }
                     await db.collection('messages').add({
                         buttonId, type: 'text', content: text, caption: '', order: newMsgOrder
@@ -296,7 +295,6 @@ const mainMessageHandler = async (ctx) => {
             }
         }
 
-        // Handle media input for states
         if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT' || state === 'AWAITING_MESSAGE_EDIT') {
             let type, fileId, caption = ctx.message.caption || '';
             if (ctx.message.photo) { type = 'photo'; fileId = ctx.message.photo.pop().file_id; } 
@@ -316,11 +314,11 @@ const mainMessageHandler = async (ctx) => {
                 if (state === 'AWAITING_NEW_MESSAGE_NEXT') {
                     const targetOrder = stateData.targetOrder;
                     const batch = db.batch();
-                    messages.filter(m => m.order > targetOrder).forEach(m => {
+                    messages.filter(m => m.order >= targetOrder).forEach(m => {
                         batch.update(db.collection('messages').doc(m.id), { order: m.order + 1 });
                     });
                     await batch.commit();
-                    newOrder = targetOrder + 1;
+                    newOrder = targetOrder;
                 }
                 await db.collection('messages').add({ buttonId, type, content: fileId, caption, order: newOrder });
                 await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
@@ -343,7 +341,6 @@ const mainMessageHandler = async (ctx) => {
         return ctx.reply('✅ تم إرسال رسالتك إلى الإدارة.');
     }
     
-    // --- Button clicks (only handle text messages that are not part of a state) ---
     if (ctx.message.text) {
         const text = ctx.message.text;
         switch (text) {
@@ -391,7 +388,8 @@ const mainMessageHandler = async (ctx) => {
                 break;
             case '➕ إضافة رسالة':
                 if (isAdmin && state === 'EDITING_CONTENT') {
-                    await userRef.update({ state: 'AWAITING_NEW_MESSAGE', stateData: { buttonId: currentPath.split('/').pop() } });
+                    const buttonId = currentPath.split('/').pop();
+                    await userRef.update({ state: 'AWAITING_NEW_MESSAGE', stateData: { buttonId } });
                     return ctx.reply('أرسل الرسالة الجديدة (نص، صورة، فيديو، ملف):');
                 }
                 break;
@@ -428,20 +426,17 @@ const mainMessageHandler = async (ctx) => {
             const buttonId = buttonDoc.id;
 
             if (state === 'EDITING_BUTTONS' && isAdmin) {
-                const inlineKb = [
-                    [Markup.button.callback('✏️ تعديل اسم', `btn:rename:${buttonId}`)],
-                    [Markup.button.callback('🗑️ حذف', `btn:delete:${buttonId}`)],
-                    [
-                        Markup.button.callback('🔼', `btn:up:${buttonId}`), 
-                        Markup.button.callback('🔽', `btn:down:${buttonId}`),
-                        Markup.button.callback('◀️', `btn:left:${buttonId}`),
-                        Markup.button.callback('▶️', `btn:right:${buttonId}`),
-                    ],
-                    [
-                        Markup.button.callback('🔒 للمشرفين فقط', `btn:adminonly:${buttonId}`),
-                        Markup.button.callback('📊 إحصائيات', `btn:stats:${buttonId}`),
-                    ]
-                ];
+                // **MODIFIED**: Emojis in a single row
+                const inlineKb = [[
+                    Markup.button.callback('✏️', `btn:rename:${buttonId}`),
+                    Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
+                    Markup.button.callback('🔼', `btn:up:${buttonId}`), 
+                    Markup.button.callback('🔽', `btn:down:${buttonId}`),
+                    Markup.button.callback('◀️', `btn:left:${buttonId}`),
+                    Markup.button.callback('▶️', `btn:right:${buttonId}`),
+                    Markup.button.callback('🔒', `btn:adminonly:${buttonId}`),
+                    Markup.button.callback('📊', `btn:stats:${buttonId}`),
+                ]];
                 return ctx.reply(`خيارات للزر "${text}":`, Markup.inlineKeyboard(inlineKb));
             }
 
@@ -553,9 +548,9 @@ bot.on('callback_query', async (ctx) => {
             return sendButtonMessages(ctx, buttonId, true);
         }
         if (subAction === 'edit') {
-            await userRef.update({ state: 'AWAITING_MESSAGE_EDIT', stateData: { messageId: targetId, buttonId: buttonId } });
+            await userRef.update({ state: 'AWAITING_MSG_CAPTION', stateData: { messageId: targetId, buttonId: buttonId } });
             await ctx.answerCbQuery();
-            return ctx.reply('أرسل المحتوى الجديد (أو الشرح الجديد للملف):');
+            return ctx.reply('أرسل الشرح الجديد للملف، أو أرسل ملفاً جديداً لاستبداله.');
         }
         if (subAction === 'up' || subAction === 'down') {
             const messagesSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
@@ -576,7 +571,7 @@ bot.on('callback_query', async (ctx) => {
         }
         if (subAction === 'addnext') {
             const msg = messageDoc.data();
-            await userRef.update({ state: 'AWAITING_NEW_MESSAGE_NEXT', stateData: { targetOrder: msg.order, buttonId: buttonId } });
+            await userRef.update({ state: 'AWAITING_NEW_MESSAGE_NEXT', stateData: { targetOrder: msg.order + 1, buttonId: buttonId } });
             await ctx.answerCbQuery();
             return ctx.reply('أرسل الرسالة التالية:');
         }
