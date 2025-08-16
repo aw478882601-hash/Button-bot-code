@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V20 - FINAL COMPLETE VERSION      |
+// |   TELEGRAM FIREBASE BOT - V21 - FINAL STABLE VERSION        |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -238,7 +238,6 @@ const mainMessageHandler = async (ctx) => {
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
 
         // --- SECTION 1: Handle states that await specific user input ---
-        // These states override any button clicks as the bot is waiting for a direct reply.
         if (state.startsWith('AWAITING_') || state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
             if (isAdmin) {
                 if (ctx.message && ctx.message.text) {
@@ -302,7 +301,6 @@ const mainMessageHandler = async (ctx) => {
                     }
                 }
                 
-                // Handle text for adding a new message
                 if ((state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT') && ctx.message && ctx.message.text) {
                     const buttonId = stateData.buttonId;
                     const messages = (await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get()).docs.map(d => ({id: d.id, ...d.data()}));
@@ -320,7 +318,6 @@ const mainMessageHandler = async (ctx) => {
                     return sendButtonMessages(ctx, buttonId, true);
                 }
 
-                // Handle media for adding/editing messages
                 if ((state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT' || state === 'AWAITING_MSG_CAPTION') && !ctx.message.text) {
                     let type, fileId, caption = ctx.message.caption || '';
                     if (ctx.message.photo) { type = 'photo'; fileId = ctx.message.photo.pop().file_id; } 
@@ -352,7 +349,6 @@ const mainMessageHandler = async (ctx) => {
                 }
             }
 
-            // Handle user contacting admin
             if(state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
                  const adminsDoc = await db.collection('config').doc('admins').get();
                  const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
@@ -386,11 +382,11 @@ const mainMessageHandler = async (ctx) => {
                  await userRef.update({ state: 'NORMAL' });
                  return ctx.reply('✅ تم إرسال رسالتك إلى الإدارة بنجاح.');
             }
-            return; // Exit after handling the state.
+            return;
         }
         
         // --- SECTION 2: Handle button clicks and regular messages (State is NORMAL, EDITING_BUTTONS, or EDITING_CONTENT) ---
-        if (!ctx.message || !ctx.message.text) return; // Ignore non-text messages if not in an awaiting state
+        if (!ctx.message || !ctx.message.text) return; 
         
         const text = ctx.message.text;
 
@@ -446,6 +442,58 @@ const mainMessageHandler = async (ctx) => {
                 break;
         }
 
+        // --- Handle supervision panel buttons ---
+        if (currentPath === 'supervision' && isAdmin) {
+            switch (text) {
+                case '📊 الإحصائيات':
+                    const totalUsers = (await db.collection('users').get()).size;
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
+                    const totalButtons = (await db.collection('buttons').get()).size;
+                    const totalMessages = (await db.collection('messages').get()).size;
+                    const statsMessage = `📊 <b>إحصائيات البوت:</b>\n\n` +
+                                         `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` +
+                                         `🔘 الأزرار: <code>${totalButtons}</code>\n` +
+                                         `✉️ الرسائل: <code>${totalMessages}</code>`;
+                    return ctx.replyWithHTML(statsMessage);
+                case '🗣️ رسالة جماعية':
+                    await userRef.update({ state: 'AWAITING_BROADCAST' });
+                    return ctx.reply('أرسل الآن الرسالة التي تريد بثها لجميع المستخدمين:');
+                case '⚙️ تعديل المشرفين':
+                    if (userId !== process.env.SUPER_ADMIN_ID) return ctx.reply('🚫 هذه الميزة للمشرف الرئيسي فقط.');
+                    const adminsDoc = await db.collection('config').doc('admins').get();
+                    const adminList = (adminsDoc.exists && adminsDoc.data().ids.length > 0) ? adminsDoc.data().ids.join('\n') : 'لا يوجد مشرفون حالياً.';
+                    return ctx.reply(`<b>المشرفون الحاليون:</b>\n${adminList}`, {
+                        parse_mode: 'HTML',
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.callback('➕ إضافة مشرف', 'admin:add'), Markup.button.callback('➖ حذف مشرف', 'admin:remove')]
+                        ])
+                    });
+                case '📝 تعديل رسالة الترحيب':
+                    await userRef.update({ state: 'AWAITING_WELCOME_MESSAGE' });
+                    return ctx.reply('أرسل رسالة الترحيب الجديدة:');
+                case '🚫 قائمة المحظورين':
+                    const bannedUsersSnapshot = await db.collection('users').where('banned', '==', true).get();
+                    if (bannedUsersSnapshot.empty) {
+                        return ctx.reply('لا يوجد مستخدمون محظورون حاليًا.');
+                    }
+                    await ctx.reply('قائمة المستخدمين المحظورين:');
+                    for (const doc of bannedUsersSnapshot.docs) {
+                        const bannedUserId = doc.id;
+                        try {
+                            const userChat = await bot.telegram.getChat(bannedUserId);
+                            const userName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
+                            const userLink = `tg://user?id=${bannedUserId}`;
+                            const userInfo = `<b>الاسم:</b> <a href="${userLink}">${userName}</a>\n<b>ID:</b> <code>${bannedUserId}</code>`;
+                            await ctx.reply(userInfo, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[ Markup.button.callback('✅ فك الحظر', `admin:unban:${bannedUserId}`) ]] } });
+                        } catch(e) {
+                            await ctx.reply(`- <code>${bannedUserId}</code>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[ Markup.button.callback('✅ فك الحظر', `admin:unban:${bannedUserId}`) ]] } });
+                        }
+                    }
+                    return;
+            }
+        }
+
         // --- Handle dynamic button clicks ---
         const buttonSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).limit(1).get();
         if (buttonSnapshot.empty) return;
@@ -475,7 +523,6 @@ const mainMessageHandler = async (ctx) => {
         if (!subButtonsSnapshot.empty) {
             await userRef.update({ currentPath: `${currentPath}/${buttonId}` });
             await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
-            await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
         } else {
             await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
         }
@@ -566,7 +613,7 @@ bot.on('callback_query', async (ctx) => {
                     await batch.commit();
                     await ctx.answerCbQuery('تم التحريك');
                     await ctx.deleteMessage();
-                    return ctx.reply('تم تحديث القائمة.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    return ctx.reply('✅ تم تحديث الترتيب. إليك القائمة الجديدة:', Markup.keyboard(await generateKeyboard(userId)).resize());
                 } else {
                     return ctx.answerCbQuery('لا يمكن التحريك');
                 }
