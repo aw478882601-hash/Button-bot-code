@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V12 - COMPLETE WITH BAN SYSTEM      |
+// |   TELEGRAM FIREBASE BOT - V13 - FINAL & FULLY FEATURED        |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -239,6 +239,7 @@ const mainMessageHandler = async (ctx) => {
 
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
 
+        // --- State-based input handling ---
         if (isAdmin) {
             if (ctx.message.text) {
                 const text = ctx.message.text;
@@ -312,7 +313,14 @@ const mainMessageHandler = async (ctx) => {
 
                     case 'AWAITING_ADMIN_REPLY':
                         try {
-                            await bot.telegram.sendMessage(stateData.targetUserId, `✉️ <b>رد من الإدارة:</b>\n\n${text}`, { parse_mode: 'HTML' });
+                            await bot.telegram.sendMessage(stateData.targetUserId, `✉️ <b>رد من الإدارة:</b>\n\n${text}`, { 
+                                parse_mode: 'HTML',
+                                reply_markup: {
+                                    inline_keyboard: [[
+                                        Markup.button.callback('✍️ الرد على المشرف', `user:reply`)
+                                    ]]
+                                }
+                            });
                             await ctx.reply('✅ تم إرسال ردك بنجاح.');
                         } catch (e) {
                             await ctx.reply('❌ فشل إرسال الرد. قد يكون المستخدم قد حظر البوت.');
