@@ -587,9 +587,20 @@ bot.on('callback_query', async (ctx) => {
 // --- Vercel Webhook Setup ---
 module.exports = async (req, res) => {
     try {
-        await bot.handleUpdate(req.body, res);
+        // تأكد من أن الطلب هو POST وأنه يحتوي على بيانات
+        if (req.method === 'POST' && req.body) {
+            // اسمح لـ Telegraf بمعالجة الطلب والرد بنفسه
+            // لا نكتب أي كود لإرسال رد هنا
+            await bot.handleUpdate(req.body, res);
+        } else {
+            // إذا كان الطلب من نوع آخر (مثل زيارة من متصفح) أرسل ردًا بسيطًا
+            res.status(200).send('Bot is running and ready for Telegram updates.');
+        }
     } catch (err) {
         console.error('Error in webhook handler:', err.message);
+        // في حالة حدوث خطأ، تأكد من إرسال رد واحد فقط
+        if (!res.headersSent) {
+            res.status(500).send('An internal server error occurred.');
+        }
     }
-    res.status(200).send('OK');
 };
