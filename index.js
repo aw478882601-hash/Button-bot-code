@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V15 - FINAL, FULLY FEATURED & FIXED |
+// |   TELEGRAM FIREBASE BOT - V15 - REWRITTEN & FULLY FEATURED    |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -239,49 +239,118 @@ const mainMessageHandler = async (ctx) => {
 
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
 
-        if (isAdmin) {
-            if (ctx.message.text) {
-                const text = ctx.message.text;
-                switch (state) {
-                    case 'AWAITING_NEW_BUTTON_NAME':
-                        const existing = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).get();
-                        if (!existing.empty) return ctx.reply('الاسم موجود مسبقاً.');
-                        const count = (await db.collection('buttons').where('parentId', '==', currentPath).get()).size;
-                        await db.collection('buttons').add({ text, parentId: currentPath, order: count, adminOnly: false, stats: {} });
-                        await userRef.update({ state: 'EDITING_BUTTONS' });
-                        return ctx.reply('✅ تم إضافة الزر.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                    
-                    case 'AWAITING_RENAME':
-                        await db.collection('buttons').doc(stateData.buttonId).update({ text: text });
-                        await userRef.update({ state: 'NORMAL', stateData: {} });
-                        return ctx.reply('✅ تم تعديل الاسم بنجاح.', Markup.keyboard(await generateKeyboard(userId)).resize());
+        // --- State-based input handling ---
+        if (state !== 'NORMAL') {
+            if (isAdmin) {
+                 if (ctx.message.text) {
+                    const text = ctx.message.text;
+                    switch (state) {
+                        case 'AWAITING_NEW_BUTTON_NAME':
+                            const existing = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).get();
+                            if (!existing.empty) return ctx.reply('الاسم موجود مسبقاً.');
+                            const count = (await db.collection('buttons').where('parentId', '==', currentPath).get()).size;
+                            await db.collection('buttons').add({ text, parentId: currentPath, order: count, adminOnly: false, stats: {} });
+                            await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+                            return ctx.reply('✅ تم إضافة الزر.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                        
+                        case 'AWAITING_RENAME':
+                            await db.collection('buttons').doc(stateData.buttonId).update({ text: text });
+                            await userRef.update({ state: 'NORMAL', stateData: {} });
+                            return ctx.reply('✅ تم تعديل الاسم بنجاح.', Markup.keyboard(await generateKeyboard(userId)).resize());
 
-                    case 'AWAITING_WELCOME_MESSAGE':
-                        await db.collection('config').doc('settings').set({ welcomeMessage: text }, { merge: true });
-                        await userRef.update({ state: 'NORMAL' });
-                        return ctx.reply('✅ تم تحديث رسالة الترحيب.');
+                        case 'AWAITING_WELCOME_MESSAGE':
+                            await db.collection('config').doc('settings').set({ welcomeMessage: text }, { merge: true });
+                            await userRef.update({ state: 'NORMAL' });
+                            return ctx.reply('✅ تم تحديث رسالة الترحيب.');
 
-                    case 'AWAITING_ADMIN_ID_TO_ADD':
-                        await db.collection('config').doc('admins').update({ ids: admin.firestore.FieldValue.arrayUnion(text) });
-                        await userRef.update({ state: 'NORMAL' });
-                        return ctx.reply(`✅ تم إضافة المشرف ${text}.`);
+                        case 'AWAITING_ADMIN_ID_TO_ADD':
+                            await db.collection('config').doc('admins').update({ ids: admin.firestore.FieldValue.arrayUnion(text) });
+                            await userRef.update({ state: 'NORMAL' });
+                            return ctx.reply(`✅ تم إضافة المشرف ${text}.`);
 
-                    case 'AWAITING_ADMIN_ID_TO_REMOVE':
-                        await db.collection('config').doc('admins').update({ ids: admin.firestore.FieldValue.arrayRemove(text) });
-                        await userRef.update({ state: 'NORMAL' });
-                        return ctx.reply(`✅ تم حذف المشرف ${text}.`);
+                        case 'AWAITING_ADMIN_ID_TO_REMOVE':
+                            await db.collection('config').doc('admins').update({ ids: admin.firestore.FieldValue.arrayRemove(text) });
+                            await userRef.update({ state: 'NORMAL' });
+                            return ctx.reply(`✅ تم حذف المشرف ${text}.`);
 
-                    case 'AWAITING_MSG_CAPTION':
-                        await db.collection('messages').doc(stateData.messageId).update({ caption: text });
+                        case 'AWAITING_MSG_CAPTION':
+                            await db.collection('messages').doc(stateData.messageId).update({ caption: text });
+                            await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                            await ctx.reply('✅ تم تعديل الشرح.');
+                            return sendButtonMessages(ctx, stateData.buttonId, true);
+
+                        case 'AWAITING_NEW_MESSAGE':
+                        case 'AWAITING_NEW_MESSAGE_NEXT':
+                            const buttonId = stateData.buttonId;
+                            const messages = (await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get()).docs.map(d => ({id: d.id, ...d.data()}));
+                            let newMsgOrder = messages.length;
+                            if (state === 'AWAITING_NEW_MESSAGE_NEXT') {
+                                const targetOrder = stateData.targetOrder;
+                                const batch = db.batch();
+                                messages.filter(m => m.order >= targetOrder).forEach(m => {
+                                    batch.update(db.collection('messages').doc(m.id), { order: m.order + 1 });
+                                });
+                                await batch.commit();
+                                newMsgOrder = targetOrder;
+                            }
+                            await db.collection('messages').add({
+                                buttonId, type: 'text', content: text, caption: '', order: newMsgOrder
+                            });
+                            await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                            await ctx.reply('✅ تم إضافة النص.');
+                            return sendButtonMessages(ctx, buttonId, true);
+                        
+                        case 'AWAITING_BROADCAST':
+                            const users = await db.collection('users').get();
+                            let successCount = 0;
+                            for (const user of users.docs) {
+                                if (!user.data().banned) {
+                                    try {
+                                        await ctx.copyMessage(user.data().chatId);
+                                        successCount++;
+                                    } catch (e) { console.error(`Broadcast failed for user ${user.id}`); }
+                                }
+                            }
+                            await userRef.update({ state: 'NORMAL' });
+                            return ctx.reply(`تم الإرسال الجماعي إلى ${successCount} مستخدم.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+
+                        case 'AWAITING_ADMIN_REPLY':
+                            try {
+                                const targetUserDoc = await db.collection('users').doc(stateData.targetUserId).get();
+                                if (!targetUserDoc.exists) return ctx.reply('❌ المستخدم غير موجود.');
+                                await bot.telegram.sendMessage(targetUserDoc.data().chatId, `✉️ <b>رد من الإدارة:</b>\n\n${text}`, { 
+                                    parse_mode: 'HTML',
+                                    reply_markup: {
+                                        inline_keyboard: [[
+                                            Markup.button.callback('✍️ الرد على المشرف', `user:reply`)
+                                        ]]
+                                    }
+                                });
+                                await ctx.reply('✅ تم إرسال ردك بنجاح.');
+                            } catch (e) {
+                                await ctx.reply('❌ فشل إرسال الرد. قد يكون المستخدم قد حظر البوت.');
+                            }
+                            await userRef.update({ state: 'NORMAL', stateData: {} });
+                            return;
+                    }
+                }
+
+                if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT' || state === 'AWAITING_MESSAGE_EDIT') {
+                    let type, fileId, caption = ctx.message.caption || '';
+                    if (ctx.message.photo) { type = 'photo'; fileId = ctx.message.photo.pop().file_id; } 
+                    else if (ctx.message.video) { type = 'video'; fileId = ctx.message.video.file_id; } 
+                    else if (ctx.message.document) { type = 'document'; fileId = ctx.message.document.file_id; }
+                    else { return; }
+
+                    const buttonId = stateData.buttonId;
+                    if (state === 'AWAITING_MESSAGE_EDIT') {
+                        await db.collection('messages').doc(stateData.messageId).update({ type, content: fileId, caption });
                         await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                        await ctx.reply('✅ تم تعديل الشرح.');
-                        return sendButtonMessages(ctx, stateData.buttonId, true);
-
-                    case 'AWAITING_NEW_MESSAGE':
-                    case 'AWAITING_NEW_MESSAGE_NEXT':
-                        const buttonId = stateData.buttonId;
+                        await ctx.reply('✅ تم تعديل الرسالة.');
+                        return sendButtonMessages(ctx, buttonId, true);
+                    } else {
                         const messages = (await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get()).docs.map(d => ({id: d.id, ...d.data()}));
-                        let newMsgOrder = messages.length;
+                        let newOrder = messages.length;
                         if (state === 'AWAITING_NEW_MESSAGE_NEXT') {
                             const targetOrder = stateData.targetOrder;
                             const batch = db.batch();
@@ -289,106 +358,49 @@ const mainMessageHandler = async (ctx) => {
                                 batch.update(db.collection('messages').doc(m.id), { order: m.order + 1 });
                             });
                             await batch.commit();
-                            newMsgOrder = targetOrder;
+                            newOrder = targetOrder;
                         }
-                        await db.collection('messages').add({
-                            buttonId, type: 'text', content: text, caption: '', order: newMsgOrder
-                        });
+                        await db.collection('messages').add({ buttonId, type, content: fileId, caption, order: newOrder });
                         await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                        await ctx.reply('✅ تم إضافة النص.');
+                        await ctx.reply('✅ تم إضافة المحتوى.');
                         return sendButtonMessages(ctx, buttonId, true);
-                    
-                    case 'AWAITING_BROADCAST':
-                        const users = await db.collection('users').get();
-                        let successCount = 0;
-                        for (const user of users.docs) {
-                            try {
-                                await ctx.copyMessage(user.data().chatId);
-                                successCount++;
-                            } catch (e) { console.error(`Broadcast failed for user ${user.id}`); }
-                        }
-                        await userRef.update({ state: 'NORMAL' });
-                        return ctx.reply(`تم الإرسال الجماعي إلى ${successCount} مستخدم.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-
-                    case 'AWAITING_ADMIN_REPLY':
-                        try {
-                            await bot.telegram.sendMessage(stateData.targetUserId, `✉️ <b>رد من الإدارة:</b>\n\n${text}`, { 
-                                parse_mode: 'HTML',
-                                reply_markup: {
-                                    inline_keyboard: [[
-                                        Markup.button.callback('✍️ الرد على المشرف', `user:reply`)
-                                    ]]
-                                }
-                            });
-                            await ctx.reply('✅ تم إرسال ردك بنجاح.');
-                        } catch (e) {
-                            await ctx.reply('❌ فشل إرسال الرد. قد يكون المستخدم قد حظر البوت.');
-                        }
-                        await userRef.update({ state: 'NORMAL', stateData: {} });
-                        return;
-                }
-            }
-
-            if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT' || state === 'AWAITING_MESSAGE_EDIT') {
-                let type, fileId, caption = ctx.message.caption || '';
-                if (ctx.message.photo) { type = 'photo'; fileId = ctx.message.photo.pop().file_id; } 
-                else if (ctx.message.video) { type = 'video'; fileId = ctx.message.video.file_id; } 
-                else if (ctx.message.document) { type = 'document'; fileId = ctx.message.document.file_id; }
-                else { return; }
-
-                const buttonId = stateData.buttonId;
-                if (state === 'AWAITING_MESSAGE_EDIT') {
-                    await db.collection('messages').doc(stateData.messageId).update({ type, content: fileId, caption });
-                    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    await ctx.reply('✅ تم تعديل الرسالة.');
-                    return sendButtonMessages(ctx, buttonId, true);
-                } else {
-                    const messages = (await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get()).docs.map(d => ({id: d.id, ...d.data()}));
-                    let newOrder = messages.length;
-                    if (state === 'AWAITING_NEW_MESSAGE_NEXT') {
-                        const targetOrder = stateData.targetOrder;
-                        const batch = db.batch();
-                        messages.filter(m => m.order >= targetOrder).forEach(m => {
-                            batch.update(db.collection('messages').doc(m.id), { order: m.order + 1 });
-                        });
-                        await batch.commit();
-                        newOrder = targetOrder;
                     }
-                    await db.collection('messages').add({ buttonId, type, content: fileId, caption, order: newOrder });
-                    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    await ctx.reply('✅ تم إضافة المحتوى.');
-                    return sendButtonMessages(ctx, buttonId, true);
                 }
             }
-        }
-        
-        if(state === 'CONTACTING_ADMIN') {
-            const adminsDoc = await db.collection('config').doc('admins').get();
-            const adminIds = adminsDoc.exists ? adminsDoc.data().ids : [];
-            const from = ctx.from;
-            const userDetails = `👤 <b>رسالة جديدة من مستخدم!</b>\n\n` +
-                                `<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}\n` +
-                                `<b>المعرف:</b> @${from.username || 'N/A'}\n` +
-                                `<b>ID:</b> <code>${from.id}</code>`;
+            
+            if(state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
+                const adminsDoc = await db.collection('config').doc('admins').get();
+                const adminIds = adminsDoc.exists ? adminsDoc.data().ids : [];
+                const from = ctx.from;
+                const messagePrefix = state === 'REPLYING_TO_ADMIN' ? '📝 <b>رد من مستخدم!</b>' : '👤 <b>رسالة جديدة من مستخدم!</b>';
+                const userDetails = `${messagePrefix}\n\n` +
+                                    `<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}\n` +
+                                    `<b>المعرف:</b> @${from.username || 'N/A'}\n` +
+                                    `<b>ID:</b> <code>${from.id}</code>`;
 
-            for (const adminId of adminIds) {
-                try {
-                    await bot.telegram.sendMessage(adminId, userDetails, { 
-                        parse_mode: 'HTML',
-                        reply_markup: {
-                            inline_keyboard: [[
-                                Markup.button.callback('✍️ رد', `admin:reply:${from.id}`),
-                                Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`)
-                            ]]
-                        }
-                    });
-                    await ctx.forwardMessage(adminId);
-                } catch(e) { console.error(`Failed to forward message to admin ${adminId}`, e); }
+                for (const adminId of adminIds) {
+                    try {
+                        await bot.telegram.sendMessage(adminId, userDetails, { 
+                            parse_mode: 'HTML',
+                            reply_markup: {
+                                inline_keyboard: [[
+                                    Markup.button.callback('✍️ رد', `admin:reply:${from.id}`),
+                                    Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`)
+                                ]]
+                            }
+                        });
+                        await ctx.forwardMessage(adminId);
+                    } catch(e) { console.error(`Failed to forward message to admin ${adminId}`, e); }
+                }
+                await userRef.update({ state: 'NORMAL' });
+                return ctx.reply('✅ تم إرسال رسالتك إلى الإدارة.');
             }
-            await userRef.update({ state: 'NORMAL' });
-            return ctx.reply('✅ تم إرسال رسالتك إلى الإدارة.');
+
+            // If we are in a state but the message is not text/media, ignore it.
+            return;
         }
         
+        // --- Normal state button clicks ---
         if (ctx.message.text) {
             const text = ctx.message.text;
             switch (text) {
@@ -478,20 +490,31 @@ const mainMessageHandler = async (ctx) => {
                         await ctx.reply('قائمة المستخدمين المحظورين:');
                         for (const doc of bannedUsersSnapshot.docs) {
                             const bannedUserId = doc.id;
-                            const bannedUserData = doc.data();
-                            const userChat = await bot.telegram.getChat(bannedUserId);
-                            const userName = userChat.first_name + (userChat.last_name ? ` ${userChat.last_name}` : '');
-                            const userLink = `tg://user?id=${bannedUserId}`;
-                            const userInfo = `<b>الاسم:</b> <a href="${userLink}">${userName}</a>\n` +
-                                             `<b>ID:</b> <code>${bannedUserId}</code>`;
-                            await ctx.reply(userInfo, {
-                                parse_mode: 'HTML',
-                                reply_markup: {
-                                    inline_keyboard: [[
-                                        Markup.button.callback('✅ فك الحظر', `admin:unban:${bannedUserId}`)
-                                    ]]
-                                }
-                            });
+                            try {
+                                const userChat = await bot.telegram.getChat(bannedUserId);
+                                const userName = userChat.first_name + (userChat.last_name ? ` ${userChat.last_name}` : '');
+                                const userLink = `tg://user?id=${bannedUserId}`;
+                                const userInfo = `<b>الاسم:</b> <a href="${userLink}">${userName}</a>\n` +
+                                                 `<b>ID:</b> <code>${bannedUserId}</code>`;
+                                await ctx.reply(userInfo, {
+                                    parse_mode: 'HTML',
+                                    reply_markup: {
+                                        inline_keyboard: [[
+                                            Markup.button.callback('✅ فك الحظر', `admin:unban:${bannedUserId}`)
+                                        ]]
+                                    }
+                                });
+                            } catch(e) {
+                                console.error(`Could not fetch info for banned user ${bannedUserId}`);
+                                await ctx.reply(`- <code>${bannedUserId}</code>`, {
+                                    parse_mode: 'HTML',
+                                    reply_markup: {
+                                        inline_keyboard: [[
+                                            Markup.button.callback('✅ فك الحظر', `admin:unban:${bannedUserId}`)
+                                        ]]
+                                    }
+                                });
+                            }
                         }
                         return;
                 }
@@ -525,26 +548,19 @@ const mainMessageHandler = async (ctx) => {
 
                 await updateButtonStats(buttonId, userId);
                 
-                // **MODIFIED**: New navigation logic
-                if (state === 'EDITING_CONTENT' && isAdmin) {
-                    // In content edit mode, always navigate in
+                // **REWRITTEN**: New navigation logic
+                const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', buttonId).limit(1).get();
+                
+                if (!subButtonsSnapshot.empty) {
+                    // It's a folder, navigate in
                     const newPath = `${currentPath}/${buttonId}`;
                     await userRef.update({ currentPath: newPath });
-                    await ctx.reply(`دخلت "${text}" لتعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                    await sendButtonMessages(ctx, buttonId, true);
+                    await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                    // Also send messages of the parent button if they exist
+                    await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
                 } else {
-                    // In normal mode, check for sub-buttons
-                    const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', buttonId).limit(1).get();
-                    if (!subButtonsSnapshot.empty) {
-                        // It's a folder, navigate in
-                        const newPath = `${currentPath}/${buttonId}`;
-                        await userRef.update({ currentPath: newPath });
-                        await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                        await sendButtonMessages(ctx, buttonId, false);
-                    } else {
-                        // It's a leaf button, just show content
-                        await sendButtonMessages(ctx, buttonId, false);
-                    }
+                    // It's a leaf button, just show content
+                    await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
                 }
             }
         }
@@ -565,14 +581,13 @@ bot.on('callback_query', async (ctx) => {
         const userRef = db.collection('users').doc(userId);
         const userDoc = await userRef.get();
         if (!userDoc.exists) return ctx.answerCbQuery('المستخدم غير موجود.');
-
-        // User action: reply to admin
+        
         if (action === 'user' && subAction === 'reply') {
-            await userRef.update({ state: 'CONTACTING_ADMIN' });
+            await userRef.update({ state: 'REPLYING_TO_ADMIN' });
             await ctx.answerCbQuery();
             return ctx.reply('أرسل الآن ردك على رسالة المشرف:');
         }
-        
+
         if (!userDoc.data().isAdmin) return ctx.answerCbQuery('غير مصرح لك.');
         
         const { currentPath } = userDoc.data();
@@ -621,14 +636,15 @@ bot.on('callback_query', async (ctx) => {
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
                 const buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 const index = buttonList.findIndex(b => b.id === targetId);
-                if (index === -1) return ctx.answerCbQuery('خطأ في العثور على الزر');
+                if (index === -1) return ctx.answerCbQuery('خطأ');
 
                 let swapIndex = -1;
+                // **FIXED**: Corrected grid movement logic
                 if (subAction === 'up' && index >= 2) swapIndex = index - 2;
                 if (subAction === 'down' && index <= buttonList.length - 3) swapIndex = index + 2;
                 if (subAction === 'left' && index % 2 === 1) swapIndex = index - 1;
                 if (subAction === 'right' && index % 2 === 0 && index < buttonList.length - 1) swapIndex = index + 1;
-
+                
                 if (swapIndex !== -1) {
                     const batch = db.batch();
                     const targetRef = db.collection('buttons').doc(targetId);
