@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V33 - COMPLETE CONTROLS & REFRESH |
+// |   TELEGRAM FIREBASE BOT - V34 - FINAL REFRESH & NOTIFICATION |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -188,13 +188,24 @@ bot.start(async (ctx) => {
         const isAdmin = adminIds.includes(userId) || isSuperAdmin;
         if (!userDoc.exists) {
             await userRef.set({ chatId: ctx.chat.id, isAdmin, currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: today, banned: false });
+            
+            const totalUsers = (await db.collection('users').get()).size;
+
             if (adminIds.length > 0) {
-                const userName = `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim();
-                const userLink = `tg://user?id=${userId}`;
-                const notificationMessage = `👤 <b>مستخدم جديد انضم!</b>\n\nالاسم: <a href="${userLink}">${userName}</a>\nID: <code>${userId}</code>`;
+                const user = ctx.from;
+                const userName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+                const userLink = `tg://user?id=${user.id}`;
+                
+                let notificationMessage = `👤 <b>مستخدم جديد انضم!</b>\n\n` +
+                                          `<b>الاسم:</b> <a href="${userLink}">${userName}</a>\n` +
+                                          `<b>المعرف:</b> ${user.username ? `@${user.username}` : 'لا يوجد'}\n` +
+                                          `<b>ID:</b> <code>${user.id}</code>\n\n` +
+                                          `👥 أصبح العدد الكلي للمستخدمين: <b>${totalUsers}</b>`;
+
                 for (const adminId of adminIds) {
-                    try { await bot.telegram.sendMessage(adminId, notificationMessage, { parse_mode: 'HTML' }); }
-                    catch (e) { console.error(`Failed to send new user notification to admin ${adminId}:`, e.message); }
+                    try {
+                        await bot.telegram.sendMessage(adminId, notificationMessage, { parse_mode: 'HTML' });
+                    } catch (e) { console.error(`Failed to send new user notification to admin ${adminId}:`, e.message); }
                 }
             }
         } else {
@@ -231,7 +242,7 @@ const mainMessageHandler = async (ctx) => {
                             return ctx.reply('✅ تم إضافة الزر.', Markup.keyboard(await generateKeyboard(userId)).resize());
                         case 'AWAITING_RENAME':
                             await db.collection('buttons').doc(stateData.buttonId).update({ text });
-                            await userRef.update({ state: 'NORMAL', stateData: {} });
+                            await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                             return ctx.reply('✅ تم تعديل الاسم بنجاح.', Markup.keyboard(await generateKeyboard(userId)).resize());
                         case 'AWAITING_WELCOME_MESSAGE':
                             await db.collection('config').doc('settings').set({ welcomeMessage: text }, { merge: true });
@@ -344,7 +355,7 @@ const mainMessageHandler = async (ctx) => {
 
         switch (text) {
             case '🔝 القائمة الرئيسية':
-                await userRef.update({ currentPath: 'root', state: 'NORMAL' });
+                await userRef.update({ currentPath: 'root', stateData: {} });
                 return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '🔙 رجوع':
                 const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
@@ -531,8 +542,9 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.answerCbQuery('⏳ جاري الحذف...');
                 const buttonToDeletePath = `${currentPath}/${targetId}`;
                 await recursiveDeleteButton(buttonToDeletePath);
-                await ctx.editMessageText('✅ تم حذف الزر وكل محتوياته.');
-                return ctx.reply('تم تحديث القائمة.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                await ctx.reply('✅ تم الحذف بنجاح. إليك القائمة المحدثة:', Markup.keyboard(await generateKeyboard(userId)).resize());
+                await ctx.deleteMessage();
+                return;
             }
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
@@ -554,8 +566,9 @@ bot.on('callback_query', async (ctx) => {
                     });
                     await batch.commit();
                     await ctx.answerCbQuery('تم التحريك');
+                    await ctx.reply('✅ تم تحديث الترتيب. إليك القائمة الجديدة:', Markup.keyboard(await generateKeyboard(userId)).resize());
                     await ctx.deleteMessage();
-                    return ctx.reply('✅ تم تحديث الترتيب. إليك القائمة الجديدة:', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
             if (subAction === 'adminonly') {
