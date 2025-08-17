@@ -259,82 +259,7 @@ const mainMessageHandler = async (ctx) => {
         let { currentPath, state, isAdmin, stateData, banned } = userDoc.data();
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
-      bot.on("message", async (ctx) => {
-    try {
-        const userId = String(ctx.from.id);
-        const userRef = db.collection("users").doc(userId);
-        const userDoc = await userRef.get();
-        if (!userDoc.exists) return;
-
-        // ✅ لو الرسالة رد (force_reply)
-        if (ctx.message.reply_to_message) {
-            const replyPrompt = ctx.message.reply_to_message.text;
-            const stateData = userDoc.data().stateData || {};
-
-            // 📝 تعديل النص
-            if (replyPrompt.includes("أدخل النص الجديد")) {
-                if (!ctx.message.text) return ctx.reply("⚠️ لازم تبعت نص فقط");
-                await db.collection("messages").doc(stateData.messageId).update({
-                    type: "text",
-                    content: ctx.message.text,
-                    entities: ctx.message.entities || [],
-                    caption: ""
-                });
-                await ctx.reply("✅ تم تعديل النص");
-                await clearAndResendMessages(ctx, userId, stateData.buttonId);
-                return;
-            }
-
-            // 📝 تعديل الشرح
-            if (replyPrompt.includes("أدخل الشرح الجديد")) {
-                if (!ctx.message.text) return ctx.reply("⚠️ لازم تبعت نص فقط");
-                await db.collection("messages").doc(stateData.messageId).update({
-                    caption: ctx.message.text,
-                    entities: ctx.message.entities || []
-                });
-                await ctx.reply("✅ تم تعديل الشرح");
-                await clearAndResendMessages(ctx, userId, stateData.buttonId);
-                return;
-            }
-
-            // 🔄 استبدال الملف/النص بالكامل
-            if (replyPrompt.includes("أرسل الملف الجديد")) {
-                let type, fileId, caption = ctx.message.caption || '', entities = ctx.message.caption_entities || [];
-
-                if (ctx.message.text) {
-                    type = "text";
-                    fileId = ctx.message.text;
-                    caption = "";
-                    entities = ctx.message.entities || [];
-                } else if (ctx.message.photo) {
-                    type = "photo";
-                    fileId = ctx.message.photo.pop().file_id;
-                } else if (ctx.message.video) {
-                    type = "video";
-                    fileId = ctx.message.video.file_id;
-                } else if (ctx.message.document) {
-                    type = "document";
-                    fileId = ctx.message.document.file_id;
-                } else {
-                    return ctx.reply("⚠️ نوع الملف غير مدعوم");
-                }
-
-                await db.collection("messages").doc(stateData.messageId).update({
-                    type,
-                    content: fileId,
-                    caption,
-                    entities
-                });
-                await ctx.reply("✅ تم استبدال الرسالة");
-                await clearAndResendMessages(ctx, userId, stateData.buttonId);
-                return;
-            }
-
-            // ➕ إضافة رسالة جديدة / تالية
-            if (replyPrompt.includes("أرسل الرسالة")) {
-                const buttonId = stateData.buttonId;
-                if (!buttonId) return ctx.reply("⚠️ خطأ: buttonId غير موجود");
-
+      
                 const messages = (await db.collection("messages")
                     .where("buttonId", "==", buttonId)
                     .orderBy("order")
@@ -589,6 +514,81 @@ const mainMessageHandler = async (ctx) => {
 };
 
 bot.on('message', mainMessageHandler);
+bot.on("message", async (ctx) => {
+    try {
+        const userId = String(ctx.from.id);
+        const userRef = db.collection("users").doc(userId);
+        const userDoc = await userRef.get();
+        if (!userDoc.exists) return;
+
+        // ✅ لو الرسالة رد (force_reply)
+        if (ctx.message.reply_to_message) {
+            const replyPrompt = ctx.message.reply_to_message.text;
+            const stateData = userDoc.data().stateData || {};
+
+            // 📝 تعديل النص
+            if (replyPrompt.includes("أدخل النص الجديد")) {
+                if (!ctx.message.text) return ctx.reply("⚠️ لازم تبعت نص فقط");
+                await db.collection("messages").doc(stateData.messageId).update({
+                    type: "text",
+                    content: ctx.message.text,
+                    entities: ctx.message.entities || [],
+                    caption: ""
+                });
+                await ctx.reply("✅ تم تعديل النص");
+                await clearAndResendMessages(ctx, userId, stateData.buttonId);
+                return;
+            }
+
+            // 📝 تعديل الشرح
+            if (replyPrompt.includes("أدخل الشرح الجديد")) {
+                if (!ctx.message.text) return ctx.reply("⚠️ لازم تبعت نص فقط");
+                await db.collection("messages").doc(stateData.messageId).update({
+                    caption: ctx.message.text,
+                    entities: ctx.message.entities || []
+                });
+                await ctx.reply("✅ تم تعديل الشرح");
+                await clearAndResendMessages(ctx, userId, stateData.buttonId);
+                return;
+            }
+
+            // 🔄 استبدال الملف/النص بالكامل
+            if (replyPrompt.includes("أرسل الملف الجديد")) {
+                let type, fileId, caption = ctx.message.caption || '', entities = ctx.message.caption_entities || [];
+
+                if (ctx.message.text) {
+                    type = "text";
+                    fileId = ctx.message.text;
+                    caption = "";
+                    entities = ctx.message.entities || [];
+                } else if (ctx.message.photo) {
+                    type = "photo";
+                    fileId = ctx.message.photo.pop().file_id;
+                } else if (ctx.message.video) {
+                    type = "video";
+                    fileId = ctx.message.video.file_id;
+                } else if (ctx.message.document) {
+                    type = "document";
+                    fileId = ctx.message.document.file_id;
+                } else {
+                    return ctx.reply("⚠️ نوع الملف غير مدعوم");
+                }
+
+                await db.collection("messages").doc(stateData.messageId).update({
+                    type,
+                    content: fileId,
+                    caption,
+                    entities
+                });
+                await ctx.reply("✅ تم استبدال الرسالة");
+                await clearAndResendMessages(ctx, userId, stateData.buttonId);
+                return;
+            }
+
+            // ➕ إضافة رسالة جديدة / تالية
+            if (replyPrompt.includes("أرسل الرسالة")) {
+                const buttonId = stateData.buttonId;
+                if (!buttonId) return ctx.reply("⚠️ خطأ: buttonId غير موجود");
 
 bot.on('callback_query', async (ctx) => {
     try {
