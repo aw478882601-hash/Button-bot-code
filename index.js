@@ -68,7 +68,6 @@ async function generateKeyboard(userId) {
       if (state === 'EDITING_BUTTONS') adminActionRow.push('➕ إضافة زر');
       if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
         adminActionRow.push('➕ إضافة رسالة');
-        adminActionRow.push('🔄 تحديث العرض'); // زر التحديث
       }
       if (adminActionRow.length > 0) keyboardRows.push(adminActionRow);
     }
@@ -270,12 +269,14 @@ const mainMessageHandler = async (ctx) => {
                         case 'AWAITING_MSG_CAPTION':
                             await db.collection('messages').doc(stateData.messageId).update({ caption: text, entities: ctx.message.caption_entities || [] });
                             await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                            await ctx.reply('✅ تم تعديل الشرح بنجاح. اضغط "تحديث العرض" لرؤية التغييرات.');
+                            await ctx.reply('✅ تم تعديل الشرح بنجاح.');
+                            await clearAndResendMessages(ctx, userId, stateData.buttonId);
                             return;
                         case 'AWAITING_TEXT_MESSAGE_EDIT':
                             await db.collection('messages').doc(stateData.messageId).update({ content: text, entities: ctx.message.entities || [] });
                             await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                            await ctx.reply('✅ تم تعديل الرسالة بنجاح. اضغط "تحديث العرض" لرؤية التغييرات.');
+                            await ctx.reply('✅ تم تعديل الرسالة بنجاح.');
+                             await clearAndResendMessages(ctx, userId, stateData.buttonId);
                             return;
                         case 'AWAITING_BROADCAST':
                             const users = await db.collection('users').get();
@@ -324,7 +325,7 @@ const mainMessageHandler = async (ctx) => {
                         await db.collection('messages').add({ buttonId, type, content: fileId, caption, entities: caption_entities, order: newMsgOrder });
                     }
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    await ctx.reply('✅ تمت إضافة الرسالة بنجاح. اضغط "تحديث العرض" لرؤيتها.');
+                    await clearAndResendMessages(ctx, userId, buttonId);
                     return;
                 }
                 if (state === 'AWAITING_MSG_CAPTION' && ctx.message && !ctx.message.text) {
@@ -335,7 +336,7 @@ const mainMessageHandler = async (ctx) => {
                     else return;
                     await db.collection('messages').doc(stateData.messageId).update({ type, content: fileId, caption, entities: caption_entities });
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    await ctx.reply('✅ تم استبدال الملف بنجاح. اضغط "تحديث العرض" لرؤية التغييرات.');
+                    await clearAndResendMessages(ctx, userId, stateData.buttonId);
                     return;
                 }
             }
@@ -415,15 +416,6 @@ const mainMessageHandler = async (ctx) => {
                     return ctx.reply('أرسل الرسالة الجديدة.');
                 }
                 break;
-            case '🔄 تحديث العرض':
-                if (isAdmin && state === 'EDITING_CONTENT') {
-                    const buttonId = currentPath.split('/').pop();
-                    if (buttonId && !['root', 'supervision'].includes(currentPath)) {
-                       await clearAndResendMessages(ctx, userId, buttonId);
-                    }
-                    return;
-                }
-                break;
         }
 
         if (currentPath === 'supervision' && isAdmin) {
@@ -477,11 +469,17 @@ const mainMessageHandler = async (ctx) => {
                 return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
+                // START: MODIFICATION - بداية التعديل
                 const inlineKb = [[
                     Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
                     Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`),
-                    Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('▶️', 'btn:right:'+buttonId), Markup.button.callback('🔒', 'btn:adminonly:'+buttonId), Markup.button.callback('📊', 'btn:stats:'+buttonId)
+                ],[
+                    Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('▶️', 'btn:right:'+buttonId),
+                    Markup.button.callback('🔒', 'btn:adminonly:'+buttonId), Markup.button.callback('📊', 'btn:stats:'+buttonId)
+                ],[
+                    Markup.button.callback('🔄 تحديث عرض الأزرار', `btn:refresh_keyboard:${buttonId}`)
                 ]];
+                // END: MODIFICATION - نهاية التعديل
                 return ctx.reply( `خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
         }
@@ -572,7 +570,8 @@ bot.on('callback_query', async (ctx) => {
             if (subAction === 'delete') {
                 const buttonToDeletePath = `${currentPath}/${targetId}`;
                 await recursiveDeleteButton(buttonToDeletePath);
-                await ctx.answerCbQuery('✅ تم الحذف بنجاح', { show_alert: false });
+                await ctx.answerCbQuery('✅ تم الحذف بنجاح');
+                await ctx.editMessageText('✅ تم الحذف. اضغط "🔄" للتحديث.');
                 return;
             }
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
@@ -594,12 +593,24 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(buttonRef, { order: i });
                     });
                     await batch.commit();
-                    await ctx.answerCbQuery('✅ تم تحديث الترتيب', { show_alert: false });
+                    await ctx.answerCbQuery('✅ تم تحديث الترتيب');
+                    await ctx.editMessageText('✅ تم تحديث الترتيب. اضغط "🔄" للتحديث.');
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
+            // START: MODIFICATION - بداية التعديل
+            if (subAction === 'refresh_keyboard') {
+                await ctx.answerCbQuery('🔄 جارٍ تحديث لوحة المفاتيح...');
+                await ctx.deleteMessage().catch(() => {});
+                await ctx.reply(
+                    '✅ تم تحديث لوحة المفاتيح.', 
+                    Markup.keyboard(await generateKeyboard(userId)).resize()
+                );
+                return;
+            }
+            // END: MODIFICATION - نهاية التعديل
             if (subAction === 'adminonly' || subAction === 'stats') {
-                // This logic remains unchanged
+               // Logic remains unchanged
             }
         }
 
@@ -614,7 +625,8 @@ bot.on('callback_query', async (ctx) => {
                 const batch = db.batch();
                 remainingMsgs.docs.forEach((doc, i) => batch.update(doc.ref, { order: i }));
                 await batch.commit();
-                await ctx.answerCbQuery('✅ تم الحذف بنجاح', { show_alert: false });
+                await ctx.answerCbQuery('✅ تم الحذف بنجاح');
+                await ctx.editMessageText('✅ تم الحذف. سيتم تحديث القائمة تلقائياً في المرة القادمة.');
                 return;
             }
             if (subAction === 'edit') {
@@ -646,7 +658,8 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(msgRef, { order: i });
                     });
                     await batch.commit();
-                    await ctx.answerCbQuery('✅ تم تحديث الترتيب بنجاح', { show_alert: false });
+                    await ctx.answerCbQuery('✅ تم تحديث الترتيب');
+                    await ctx.editMessageText('✅ تم تحديث الترتيب. سيتم تحديث القائمة تلقائياً في المرة القادمة.');
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
