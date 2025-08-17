@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V29 - COMPLETE PRODUCTION BUILD   |
+// |   TELEGRAM FIREBASE BOT - V32 - FINAL COMPLETE BUILD        |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -94,13 +94,12 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     const messagesSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
     
     if (messagesSnapshot.empty && inEditMode) {
-        await ctx.reply('ℹ️ لا يوجد محتوى لعرضه في هذا القسم حاليًا.');
+        return 0;
     }
 
     for (const doc of messagesSnapshot.docs) {
         const message = doc.data();
         const messageId = doc.id;
-        
         let inlineKeyboard = [];
         if (inEditMode) {
             inlineKeyboard = [[
@@ -109,19 +108,15 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
                 Markup.button.callback('🗑️', `msg:delete:${messageId}`),
             ]];
         }
-
         const options = { 
             caption: message.caption || '',
             entities: message.entities,
             parse_mode: (message.entities && message.entities.length > 0) ? undefined : 'HTML',
             reply_markup: inEditMode && inlineKeyboard.length > 0 ? { inline_keyboard: inlineKeyboard } : undefined
         };
-
         try {
             switch (message.type) {
-                case 'text':
-                    await ctx.reply(message.content, { ...options }); 
-                    break;
+                case 'text': await ctx.reply(message.content, { ...options }); break;
                 case 'photo': await ctx.replyWithPhoto(message.content, options); break;
                 case 'video': await ctx.replyWithVideo(message.content, options); break;
                 case 'document': await ctx.replyWithDocument(message.content, options); break;
@@ -138,39 +133,29 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
             }
         }
     }
+    return messagesSnapshot.size;
 }
 
 async function updateButtonStats(buttonId, userId) {
     const today = new Date().toISOString().split('T')[0];
     const buttonRef = db.collection('buttons').doc(buttonId);
-
     try {
         await db.runTransaction(async (transaction) => {
             const buttonDoc = await transaction.get(buttonRef);
             if (!buttonDoc.exists) return;
-
             let stats = buttonDoc.data().stats || {};
             let totalUsers = stats.totalUsers || [];
-            if (!totalUsers.includes(userId)) {
-                totalUsers.push(userId);
-            }
-            
+            if (!totalUsers.includes(userId)) totalUsers.push(userId);
             let dailyUsers = stats.dailyUsers || {};
             dailyUsers[today] = dailyUsers[today] || [];
-            if (!dailyUsers[today].includes(userId)) {
-                dailyUsers[today].push(userId);
-            }
-
+            if (!dailyUsers[today].includes(userId)) dailyUsers[today].push(userId);
             transaction.update(buttonRef, {
                 'stats.totalClicks': admin.firestore.FieldValue.increment(1),
                 [`stats.dailyClicks.${today}`]: admin.firestore.FieldValue.increment(1),
-                'stats.totalUsers': totalUsers,
-                'stats.dailyUsers': dailyUsers
+                'stats.totalUsers': totalUsers, 'stats.dailyUsers': dailyUsers
             });
         });
-    } catch (e) {
-        console.error(`Button stats transaction failed for button ${buttonId}:`, e);
-    }
+    } catch (e) { console.error(`Button stats transaction failed for button ${buttonId}:`, e); }
 }
 
 async function recursiveDeleteButton(buttonPath) {
@@ -179,10 +164,8 @@ async function recursiveDeleteButton(buttonPath) {
         const subPath = `${buttonPath}/${sub.id}`;
         await recursiveDeleteButton(subPath);
     }
-    
     const buttonId = buttonPath.split('/').pop();
     const messages = await db.collection('messages').where('buttonId', '==', buttonId).get();
-    
     const batch = db.batch();
     messages.forEach(doc => batch.delete(doc.ref));
     batch.delete(db.collection('buttons').doc(buttonId));
@@ -199,42 +182,28 @@ bot.start(async (ctx) => {
         const today = new Date().toISOString().split('T')[0];
         const userRef = db.collection('users').doc(userId);
         const userDoc = await userRef.get();
-
         const adminsDoc = await db.collection('config').doc('admins').get();
         const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
-        
         const isSuperAdmin = userId === process.env.SUPER_ADMIN_ID;
         const isAdmin = adminIds.includes(userId) || isSuperAdmin;
-
         if (!userDoc.exists) {
-            await userRef.set({
-                chatId: ctx.chat.id, isAdmin, currentPath: 'root',
-                state: 'NORMAL', stateData: {}, lastActive: today, banned: false
-            });
-            
+            await userRef.set({ chatId: ctx.chat.id, isAdmin, currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: today, banned: false });
             if (adminIds.length > 0) {
                 const userName = `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim();
                 const userLink = `tg://user?id=${userId}`;
                 const notificationMessage = `👤 <b>مستخدم جديد انضم!</b>\n\nالاسم: <a href="${userLink}">${userName}</a>\nID: <code>${userId}</code>`;
                 for (const adminId of adminIds) {
-                    try {
-                        await bot.telegram.sendMessage(adminId, notificationMessage, { parse_mode: 'HTML' });
-                    } catch (e) { console.error(`Failed to send new user notification to admin ${adminId}:`, e.message); }
+                    try { await bot.telegram.sendMessage(adminId, notificationMessage, { parse_mode: 'HTML' }); }
+                    catch (e) { console.error(`Failed to send new user notification to admin ${adminId}:`, e.message); }
                 }
             }
-
         } else {
             await userRef.update({ currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: today, isAdmin });
         }
-
         const settingsDoc = await db.collection('config').doc('settings').get();
         const welcomeMessage = (settingsDoc.exists && settingsDoc.data().welcomeMessage) ? settingsDoc.data().welcomeMessage : 'أهلاً بك في البوت!';
-        
         await ctx.reply(welcomeMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
-    } catch (error) {
-        console.error("FATAL ERROR in bot.start:", error);
-        console.error("Caused by update:", JSON.stringify(ctx.update, null, 2));
-    }
+    } catch (error) { console.error("FATAL ERROR in bot.start:", error, "Update:", ctx.update); }
 });
 
 const mainMessageHandler = async (ctx) => {
@@ -243,10 +212,8 @@ const mainMessageHandler = async (ctx) => {
         const userRef = db.collection('users').doc(userId);
         const userDoc = await userRef.get();
         if (!userDoc.exists) return bot.start(ctx);
-
         let { currentPath, state, isAdmin, stateData, banned } = userDoc.data();
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
-        
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
 
         // --- SECTION 1: Handle states that await specific user input ---
@@ -279,17 +246,12 @@ const mainMessageHandler = async (ctx) => {
                             await userRef.update({ state: 'NORMAL' });
                             return ctx.reply(`✅ تم حذف المشرف ${text}.`);
                         case 'AWAITING_MSG_CAPTION':
-                            await db.collection('messages').doc(stateData.messageId).update({ caption: text });
+                            await db.collection('messages').doc(stateData.messageId).update({ caption: text, entities: ctx.message.caption_entities || [] });
                             await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                            await ctx.reply('✅ تم تعديل شرح الملف.');
                             return sendButtonMessages(ctx, stateData.buttonId, true);
                         case 'AWAITING_TEXT_MESSAGE_EDIT':
-                            await db.collection('messages').doc(stateData.messageId).update({ 
-                                content: text,
-                                entities: ctx.message.entities || []
-                            });
+                            await db.collection('messages').doc(stateData.messageId).update({ content: text, entities: ctx.message.entities || [] });
                             await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                            await ctx.reply('✅ تم تعديل الرسالة النصية.');
                             return sendButtonMessages(ctx, stateData.buttonId, true);
                         case 'AWAITING_BROADCAST':
                             const users = await db.collection('users').get();
@@ -315,12 +277,11 @@ const mainMessageHandler = async (ctx) => {
                             return;
                     }
                 }
-                
                 if ((state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT') && ctx.message) {
                     const buttonId = stateData.buttonId;
                     if (!buttonId) {
-                        await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                        return ctx.reply("حدث خطأ حرج. يرجى المحاولة مرة أخرى.");
+                        await userRef.update({ state: 'NORMAL', stateData: {} });
+                        return ctx.reply("حدث خطأ حرج (buttonId غير موجود). يرجى المحاولة مرة أخرى.");
                     }
                     const messages = (await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get()).docs.map(d => ({id: d.id, ...d.data()}));
                     let newMsgOrder = messages.length;
@@ -331,37 +292,30 @@ const mainMessageHandler = async (ctx) => {
                         await batch.commit();
                         newMsgOrder = targetOrder;
                     }
-
                     if (ctx.message.text) {
                         await db.collection('messages').add({ buttonId, type: 'text', content: ctx.message.text, entities: ctx.message.entities || [], caption: '', order: newMsgOrder });
                     } else {
-                        let type, fileId, caption = ctx.message.caption || '';
-                        let caption_entities = ctx.message.caption_entities || [];
+                        let type, fileId, caption = ctx.message.caption || '', caption_entities = ctx.message.caption_entities || [];
                         if (ctx.message.photo) { type = 'photo'; fileId = ctx.message.photo.pop().file_id; } 
                         else if (ctx.message.video) { type = 'video'; fileId = ctx.message.video.file_id; } 
                         else if (ctx.message.document) { type = 'document'; fileId = ctx.message.document.file_id; }
                         else return;
                         await db.collection('messages').add({ buttonId, type, content: fileId, caption, entities: caption_entities, order: newMsgOrder });
                     }
-
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
                     return sendButtonMessages(ctx, buttonId, true);
                 }
-
                 if (state === 'AWAITING_MSG_CAPTION' && ctx.message && !ctx.message.text) {
-                    let type, fileId, caption = ctx.message.caption || '';
-                    let caption_entities = ctx.message.caption_entities || [];
+                    let type, fileId, caption = ctx.message.caption || '', caption_entities = ctx.message.caption_entities || [];
                     if (ctx.message.photo) { type = 'photo'; fileId = ctx.message.photo.pop().file_id; } 
                     else if (ctx.message.video) { type = 'video'; fileId = ctx.message.video.file_id; } 
                     else if (ctx.message.document) { type = 'document'; fileId = ctx.message.document.file_id; }
                     else return;
                     await db.collection('messages').doc(stateData.messageId).update({ type, content: fileId, caption, entities: caption_entities });
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    await ctx.reply('✅ تم تعديل الرسالة.');
                     return sendButtonMessages(ctx, stateData.buttonId, true);
                 }
             }
-
             if(state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
                  const adminsDoc = await db.collection('config').doc('admins').get();
                  const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
@@ -418,11 +372,7 @@ const mainMessageHandler = async (ctx) => {
                 if (isAdmin) {
                     const newContentState = state === 'EDITING_CONTENT' ? 'NORMAL' : 'EDITING_CONTENT';
                     await userRef.update({ state: newContentState });
-                    await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                    if (newContentState === 'EDITING_CONTENT' && currentPath !== 'root' && currentPath !== 'supervision') {
-                        await sendButtonMessages(ctx, currentPath.split('/').pop(), true);
-                    }
-                    return;
+                    return ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
                 }
                 break;
             case '➕ إضافة زر':
@@ -432,7 +382,7 @@ const mainMessageHandler = async (ctx) => {
                 }
                 break;
             case '➕ إضافة رسالة':
-                if (isAdmin && state === 'EDITING_CONTENT' && currentPath !== 'root' && currentPath !== 'supervision') {
+                if (isAdmin && state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
                     await userRef.update({ state: 'AWAITING_NEW_MESSAGE', stateData: { buttonId: currentPath.split('/').pop() } });
                     return ctx.reply('أرسل الرسالة الجديدة.');
                 }
@@ -506,15 +456,19 @@ const mainMessageHandler = async (ctx) => {
         }
         
         await updateButtonStats(buttonId, userId);
-        
-        await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
-        
         const potentialChildParentId = `${currentPath}/${buttonId}`;
         const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', potentialChildParentId).limit(1).get();
         
         if (!subButtonsSnapshot.empty) {
+            await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
             await userRef.update({ currentPath: potentialChildParentId });
             await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
+        } else {
+            const messageCount = await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
+            if (state === 'EDITING_CONTENT' && messageCount === 0) {
+                await userRef.update({ currentPath: potentialChildParentId });
+                await ctx.reply('تم الدخول للزر الفارغ. لوحة المفاتيح تم تحديثها.', Markup.keyboard(await generateKeyboard(userId)).resize());
+            }
         }
 
     } catch (error) {
@@ -569,7 +523,6 @@ bot.on('callback_query', async (ctx) => {
                 let buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 const index = buttonList.findIndex(b => b.id === targetId);
                 if (index === -1) return ctx.answerCbQuery('خطأ');
-
                 let swapIndex = -1;
                 if (subAction === 'up' && index >= 2) swapIndex = index - 2;
                 else if (subAction === 'down' && index < buttonList.length - 2) swapIndex = index + 2;
@@ -587,15 +540,61 @@ bot.on('callback_query', async (ctx) => {
                     await ctx.answerCbQuery('تم التحريك');
                     await ctx.deleteMessage();
                     return ctx.reply('✅ تم تحديث الترتيب. إليك القائمة الجديدة:', Markup.keyboard(await generateKeyboard(userId)).resize());
-                } else {
-                    return ctx.answerCbQuery('لا يمكن التحريك');
-                }
+                } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
             // ... (other btn actions)
         }
 
         if (action === 'msg') {
-            // ... (all msg actions)
+            const messageDoc = await db.collection('messages').doc(targetId).get();
+            if(!messageDoc.exists) return ctx.answerCbQuery('الرسالة غير موجودة');
+            const { buttonId } = messageDoc.data();
+
+            if (subAction === 'delete') {
+                await db.collection('messages').doc(targetId).delete();
+                const remainingMsgs = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
+                const batch = db.batch();
+                remainingMsgs.docs.forEach((doc, i) => batch.update(doc.ref, { order: i }));
+                await batch.commit();
+                await ctx.answerCbQuery('تم الحذف');
+                await ctx.deleteMessage();
+                return sendButtonMessages(ctx, buttonId, true);
+            }
+            if (subAction === 'edit') {
+                const messageToEdit = messageDoc.data();
+                if (messageToEdit.type === 'text') {
+                    await userRef.update({ state: 'AWAITING_TEXT_MESSAGE_EDIT', stateData: { messageId: targetId, buttonId } });
+                    await ctx.answerCbQuery();
+                    return ctx.reply('📝 أرسل الآن النص الجديد للرسالة.');
+                } else {
+                    await userRef.update({ state: 'AWAITING_MSG_CAPTION', stateData: { messageId: targetId, buttonId } });
+                    await ctx.answerCbQuery();
+                    return ctx.reply('🖼️ أرسل الشرح الجديد للملف، أو أرسل ملفًا جديدًا لاستبداله.');
+                }
+            }
+            if (subAction === 'up' || subAction === 'down') {
+                const messagesSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
+                let messageList = messagesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                const currentIndex = messageList.findIndex(m => m.id === targetId);
+                if (currentIndex === -1) return ctx.answerCbQuery('خطأ');
+                let targetIndex = -1;
+                if (subAction === 'up' && currentIndex > 0) targetIndex = currentIndex - 1;
+                else if (subAction === 'down' && currentIndex < messageList.length - 1) targetIndex = currentIndex + 1;
+
+                if (targetIndex !== -1) {
+                    [messageList[currentIndex], messageList[targetIndex]] = [messageList[targetIndex], messageList[currentIndex]];
+                    const batch = db.batch();
+                    messageList.forEach((msg, i) => {
+                        const msgRef = db.collection('messages').doc(msg.id);
+                        batch.update(msgRef, { order: i });
+                    });
+                    await batch.commit();
+                    await ctx.answerCbQuery('تم التحريك');
+                    await ctx.deleteMessage();
+                    return sendButtonMessages(ctx, buttonId, true);
+                } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
+            }
+            if (subAction === 'addnext') { /* ... */ }
         }
     } catch (error) {
         console.error("FATAL ERROR in callback_query handler:", error);
