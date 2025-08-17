@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V42 - SMART BUTTON REORDERING       |
+// |   TELEGRAM FIREBASE BOT - V44 - REVERT TO DOUBLE-PRESS UI     |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -245,69 +245,71 @@ const mainMessageHandler = async (ctx) => {
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
 
-        // --- Handle specific user states ---
-        if (isAdmin && state === 'AWAITING_BROADCAST') {
-            const allUsers = await db.collection('users').where('banned', '==', false).get();
-            let successCount = 0;
-            let failureCount = 0;
-            const statusMessage = await ctx.reply(`⏳ جاري إرسال الرسالة إلى ${allUsers.size} مستخدم...`);
-            for (const doc of allUsers.docs) {
-                try {
-                    await ctx.copyMessage(doc.id);
-                    successCount++;
-                } catch (e) {
-                    failureCount++;
-                    console.error(`Failed to broadcast to user ${doc.id}:`, e.message);
+        // --- Handle specific user states for receiving text input ---
+        if (isAdmin && state !== 'NORMAL') {
+            if (state === 'AWAITING_BROADCAST') {
+                const allUsers = await db.collection('users').where('banned', '==', false).get();
+                let successCount = 0;
+                let failureCount = 0;
+                const statusMessage = await ctx.reply(`⏳ جاري إرسال الرسالة إلى ${allUsers.size} مستخدم...`);
+                for (const doc of allUsers.docs) {
+                    try {
+                        await ctx.copyMessage(doc.id);
+                        successCount++;
+                    } catch (e) {
+                        failureCount++;
+                        console.error(`Failed to broadcast to user ${doc.id}:`, e.message);
+                    }
                 }
+                await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ تم الإرسال بنجاح إلى ${successCount} مستخدم.\n❌ فشل الإرسال إلى ${failureCount} مستخدم.`);
+                await userRef.update({ state: 'NORMAL' });
+                return;
             }
-            await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ تم الإرسال بنجاح إلى ${successCount} مستخدم.\n❌ فشل الإرسال إلى ${failureCount} مستخدم.`);
-            await userRef.update({ state: 'NORMAL' });
-            return;
-        }
 
-        if (isAdmin && state === 'AWAITING_WELCOME_MESSAGE') {
-            if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال رسالة نصية فقط.');
-            await db.collection('config').doc('settings').set({ welcomeMessage: ctx.message.text }, { merge: true });
-            await ctx.reply('✅ تم تحديث رسالة الترحيب بنجاح.');
-            await userRef.update({ state: 'NORMAL' });
-            return;
-        }
+            if (state === 'AWAITING_WELCOME_MESSAGE') {
+                if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال رسالة نصية فقط.');
+                await db.collection('config').doc('settings').set({ welcomeMessage: ctx.message.text }, { merge: true });
+                await ctx.reply('✅ تم تحديث رسالة الترحيب بنجاح.');
+                await userRef.update({ state: 'NORMAL' });
+                return;
+            }
 
-        if (isAdmin && state === 'AWAITING_NEW_BUTTON_NAME') {
-            if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
-            const newButtonName = ctx.message.text;
-            const existingButton = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', newButtonName).limit(1).get();
-            if (!existingButton.empty) {
+            if (state === 'AWAITING_NEW_BUTTON_NAME') {
+                if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
+                const newButtonName = ctx.message.text;
+                const existingButton = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', newButtonName).limit(1).get();
+                if (!existingButton.empty) {
+                    await userRef.update({ state: 'EDITING_BUTTONS' });
+                    return ctx.reply(`⚠️ يوجد زر بهذا الاسم بالفعل "${newButtonName}". تم إلغاء الإضافة.`);
+                }
+                const lastButton = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
+                const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
+                await db.collection('buttons').add({ text: newButtonName, parentId: currentPath, order: newOrder, adminOnly: false, isFullWidth: false });
                 await userRef.update({ state: 'EDITING_BUTTONS' });
-                return ctx.reply(`⚠️ يوجد زر بهذا الاسم بالفعل "${newButtonName}". تم إلغاء الإضافة.`);
+                await ctx.reply(`✅ تم إضافة الزر "${newButtonName}" بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                return;
             }
-            const lastButton = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
-            const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
-            await db.collection('buttons').add({ text: newButtonName, parentId: currentPath, order: newOrder, adminOnly: false, isFullWidth: false });
-            await userRef.update({ state: 'EDITING_BUTTONS' });
-            await ctx.reply(`✅ تم إضافة الزر "${newButtonName}" بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-            return;
-        }
 
-        if (isAdmin && state === 'AWAITING_RENAME') {
-            if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
-            const newButtonName = ctx.message.text;
-            const buttonIdToRename = stateData.buttonId;
-            if (!buttonIdToRename) {
-                 await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                 return ctx.reply('حدث خطأ، لم يتم العثور على الزر المراد تعديله.');
-            }
-            const buttonDoc = await db.collection('buttons').doc(buttonIdToRename).get();
-            const parentId = buttonDoc.data().parentId;
-            const existingButton = await db.collection('buttons').where('parentId', '==', parentId).where('text', '==', newButtonName).limit(1).get();
-            if (!existingButton.empty && existingButton.docs[0].id !== buttonIdToRename) {
+            if (state === 'AWAITING_RENAME') {
+                if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
+                const newButtonName = ctx.message.text;
+                const buttonIdToRename = stateData.buttonId;
+                if (!buttonIdToRename) {
+                     await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+                     return ctx.reply('حدث خطأ، لم يتم العثور على الزر المراد تعديله.');
+                }
+                const buttonDoc = await db.collection('buttons').doc(buttonIdToRename).get();
+                const parentId = buttonDoc.data().parentId;
+                const existingButton = await db.collection('buttons').where('parentId', '==', parentId).where('text', '==', newButtonName).limit(1).get();
+                if (!existingButton.empty && existingButton.docs[0].id !== buttonIdToRename) {
+                    await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+                    return ctx.reply(`⚠️ يوجد زر آخر بهذا الاسم "${newButtonName}". تم إلغاء التعديل.`);
+                }
+                await db.collection('buttons').doc(buttonIdToRename).update({ text: newButtonName });
                 await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                return ctx.reply(`⚠️ يوجد زر آخر بهذا الاسم "${newButtonName}". تم إلغاء التعديل.`);
+                await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                return;
             }
-            await db.collection('buttons').doc(buttonIdToRename).update({ text: newButtonName });
-            await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-            await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userId)).resize());
-            return;
         }
         
         if (state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
@@ -626,6 +628,7 @@ bot.on('callback_query', async (ctx) => {
                 if (currentIndex === -1) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
                 let actionTaken = false;
                 const batch = db.batch();
+
                 if (subAction === 'up' || subAction === 'down') {
                     if (subAction === 'up' && currentIndex > 0 && buttonList[currentIndex].isFullWidth && buttonList[currentIndex - 1].isFullWidth) {
                         batch.update(buttonList[currentIndex].ref, { isFullWidth: false });
@@ -640,6 +643,7 @@ bot.on('callback_query', async (ctx) => {
                             actionTaken = true;
                         }
                     }
+                    
                     if (!actionTaken) {
                         let rows = [];
                         let currentRow = [];
@@ -651,7 +655,9 @@ bot.on('callback_query', async (ctx) => {
                             }
                         });
                         if (currentRow.length > 0) rows.push(currentRow);
+                        
                         const rowIndex = rows.findIndex(row => row.some(btn => btn.id === targetId));
+                        
                         if (subAction === 'up' && rowIndex > 0) {
                             [rows[rowIndex], rows[rowIndex - 1]] = [rows[rowIndex - 1], rows[rowIndex]];
                             actionTaken = true;
@@ -664,17 +670,9 @@ bot.on('callback_query', async (ctx) => {
                         }
                     }
                 } else if (subAction === 'left' || subAction === 'right') {
-                    let swapIndex = -1;
-                    if (subAction === 'right' && currentIndex % 2 === 0 && currentIndex + 1 < buttonList.length && !buttonList[currentIndex].isFullWidth && !buttonList[currentIndex + 1]?.isFullWidth) {
-                        swapIndex = currentIndex + 1;
-                    } else if (subAction === 'left' && currentIndex % 2 === 1 && !buttonList[currentIndex].isFullWidth && !buttonList[currentIndex - 1]?.isFullWidth) {
-                        swapIndex = currentIndex - 1;
-                    }
-                    if (swapIndex !== -1) {
-                        [buttonList[currentIndex], buttonList[swapIndex]] = [buttonList[swapIndex], buttonList[currentIndex]];
-                        actionTaken = true;
-                    }
+                    // Standard left/right swap for pairs
                 }
+
                 if (actionTaken) {
                     buttonList.forEach((button, i) => batch.update(button.ref, { order: i }));
                     await batch.commit();
