@@ -65,10 +65,12 @@ async function generateKeyboard(userId) {
     }
     
     const fixedButtons = [];
+    // START: MODIFICATION - بداية التعديل
     if (currentPath !== 'root') {
       fixedButtons.push('🔙 رجوع');
+      fixedButtons.push('🔝 القائمة الرئيسية');
     }
-    fixedButtons.push('🔝 القائمة الرئيسية');
+    // END: MODIFICATION - نهاية التعديل
     
     if (isAdmin && currentPath === 'root') {
       fixedButtons.push('👑 الإشراف');
@@ -595,10 +597,11 @@ bot.on('callback_query', async (ctx) => {
                 const batch = db.batch();
                 remainingMsgs.docs.forEach((doc, i) => batch.update(doc.ref, { order: i }));
                 await batch.commit();
-                await ctx.answerCbQuery();
-                await ctx.deleteMessage().catch(() => {});
+                
                 // START: MODIFICATION - بداية التعديل
-                await ctx.reply('✅ تم حذف الرسالة بنجاح.');
+                await ctx.answerCbQuery('✅ تم الحذف بنجاح');
+                // The line ctx.deleteMessage() is now removed.
+                await sendButtonMessages(ctx, buttonId, true);
                 // END: MODIFICATION - نهاية التعديل
                 return;
             }
@@ -631,10 +634,11 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(msgRef, { order: i });
                     });
                     await batch.commit();
-                    await ctx.answerCbQuery();
-                    await ctx.deleteMessage().catch(() => {});
+                    
                     // START: MODIFICATION - بداية التعديل
-                    await ctx.reply('✅ تم تحديث ترتيب الرسالة بنجاح.');
+                    await ctx.answerCbQuery('✅ تم تحديث الترتيب بنجاح');
+                    // The line ctx.deleteMessage() is now removed.
+                    await sendButtonMessages(ctx, buttonId, true);
                     // END: MODIFICATION - نهاية التعديل
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
