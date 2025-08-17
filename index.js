@@ -596,11 +596,61 @@ bot.on("message", async (ctx) => {
                 return;
             }
 
-            // ➕ إضافة رسالة جديدة / تالية
+                        // ➕ إضافة رسالة جديدة / تالية
             if (replyPrompt.includes("أرسل الرسالة")) {
                 const buttonId = stateData.buttonId;
                 if (!buttonId) return ctx.reply("⚠️ خطأ: buttonId غير موجود");
-          }
+
+                let type, fileId, caption = ctx.message.caption || '', entities = ctx.message.caption_entities || [];
+
+                if (ctx.message.text) {
+                    type = "text";
+                    fileId = ctx.message.text;
+                    caption = "";
+                    entities = ctx.message.entities || [];
+                } else if (ctx.message.photo) {
+                    type = "photo";
+                    fileId = ctx.message.photo.pop().file_id;
+                } else if (ctx.message.video) {
+                    type = "video";
+                    fileId = ctx.message.video.file_id;
+                } else if (ctx.message.document) {
+                    type = "document";
+                    fileId = ctx.message.document.file_id;
+                } else {
+                    return ctx.reply("⚠️ نوع الرسالة غير مدعوم");
+                }
+
+                // احسب الترتيب
+                let order = 0;
+                if (typeof stateData.targetOrder === "number") {
+                    order = stateData.targetOrder; // لو إضافة تالية
+                } else {
+                    const lastMsg = await db.collection("messages")
+                        .where("buttonId", "==", buttonId)
+                        .orderBy("order", "desc")
+                        .limit(1)
+                        .get();
+                    if (!lastMsg.empty) {
+                        order = lastMsg.docs[0].data().order + 1;
+                    }
+                }
+
+                // أضف الرسالة
+                await db.collection("messages").add({
+                    buttonId,
+                    type,
+                    content: fileId,
+                    caption,
+                    entities,
+                    order
+                });
+
+                await ctx.reply("✅ تم إضافة الرسالة");
+                await clearAndResendMessages(ctx, userId, buttonId);
+                return;
+            }
+
 bot.on('message', mainMessageHandler);
 bot.on('callback_query', async (ctx) => {
     try {
