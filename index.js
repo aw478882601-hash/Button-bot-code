@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V23 - FINAL ROOT CAUSE FIX        |
+// |   TELEGRAM FIREBASE BOT - V25 - FINAL COMPLETE VERSION      |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -165,12 +165,16 @@ async function updateButtonStats(buttonId, userId) {
     }
 }
 
-async function recursiveDeleteButton(buttonId) {
-    const subButtons = await db.collection('buttons').where('parentId', '==', buttonId).get();
+async function recursiveDeleteButton(buttonPath) {
+    const subButtons = await db.collection('buttons').where('parentId', '==', buttonPath).get();
     for (const sub of subButtons.docs) {
-        await recursiveDeleteButton(sub.id);
+        const subPath = `${buttonPath}/${sub.id}`;
+        await recursiveDeleteButton(subPath);
     }
+    
+    const buttonId = buttonPath.split('/').pop();
     const messages = await db.collection('messages').where('buttonId', '==', buttonId).get();
+    
     const batch = db.batch();
     messages.forEach(doc => batch.delete(doc.ref));
     batch.delete(db.collection('buttons').doc(buttonId));
@@ -244,24 +248,12 @@ const mainMessageHandler = async (ctx) => {
                     const text = ctx.message.text;
                     switch (state) {
                         case 'AWAITING_NEW_BUTTON_NAME':
-                            // FIX: Extract the correct parentId from the path
-                            const pathSegments = currentPath.split('/');
-                            const correctParentId = pathSegments[pathSegments.length - 1];
-
-                            const existing = await db.collection('buttons').where('parentId', '==', correctParentId).where('text', '==', text).get();
+                            const existing = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).get();
                             if (!existing.empty) return ctx.reply('الاسم موجود مسبقاً.');
-                            
-                            const count = (await db.collection('buttons').where('parentId', '==', correctParentId).get()).size;
-                            
-                            await db.collection('buttons').add({
-                                text,
-                                parentId: correctParentId, // <-- Use the corrected parentId
-                                order: count,
-                                adminOnly: false,
-                                stats: {} 
-                            });
+                            const count = (await db.collection('buttons').where('parentId', '==', currentPath).get()).size;
+                            await db.collection('buttons').add({ text, parentId: currentPath, order: count, adminOnly: false, stats: {} });
                             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                            return ctx.reply('✅ تم إضافة الزر بنجاح.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                            return ctx.reply('✅ تم إضافة الزر.', Markup.keyboard(await generateKeyboard(userId)).resize());
                         case 'AWAITING_RENAME':
                             await db.collection('buttons').doc(stateData.buttonId).update({ text });
                             await userRef.update({ state: 'NORMAL', stateData: {} });
@@ -330,7 +322,7 @@ const mainMessageHandler = async (ctx) => {
                     return sendButtonMessages(ctx, buttonId, true);
                 }
 
-                if ((state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT' || state === 'AWAITING_MSG_CAPTION') && !ctx.message.text) {
+                if ((state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_NEW_MESSAGE_NEXT' || state === 'AWAITING_MSG_CAPTION') && ctx.message && !ctx.message.text) {
                     let type, fileId, caption = ctx.message.caption || '';
                     if (ctx.message.photo) { type = 'photo'; fileId = ctx.message.photo.pop().file_id; } 
                     else if (ctx.message.video) { type = 'video'; fileId = ctx.message.video.file_id; } 
@@ -397,7 +389,7 @@ const mainMessageHandler = async (ctx) => {
             return;
         }
         
-        // --- SECTION 2: Handle button clicks and regular messages (State is NORMAL, EDITING_BUTTONS, or EDITING_CONTENT) ---
+        // --- SECTION 2: Handle button clicks and regular messages ---
         if (!ctx.message || !ctx.message.text) return; 
         
         const text = ctx.message.text;
@@ -522,22 +514,21 @@ const mainMessageHandler = async (ctx) => {
                 const inlineKb = [[
                     Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
                     Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`),
-                    Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`),
-                    Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`),
+                    Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('▶️', 'btn:right:'+buttonId), Markup.button.callback('🔒', 'btn:adminonly:'+buttonId), Markup.button.callback('📊', 'btn:stats:'+buttonId)
                 ]];
-                return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
+                return ctx.reply( `خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
         }
         
         await updateButtonStats(buttonId, userId);
-        const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', buttonId).get();
+        
+        const potentialChildParentId = `${currentPath}/${buttonId}`;
+        const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', potentialChildParentId).limit(1).get();
 
-        if (subButtonsSnapshot.size > 0) {
-            // It's a folder, navigate into it
-            await userRef.update({ currentPath: `${currentPath}/${buttonId}` });
-            await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
+        if (!subButtonsSnapshot.empty) {
+            await userRef.update({ currentPath: potentialChildParentId });
+            await ctx.reply( `أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
         } else {
-            // It's a leaf button, just show its content
             await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
         }
 
@@ -605,7 +596,8 @@ bot.on('callback_query', async (ctx) => {
             }
             if (subAction === 'delete') {
                 await ctx.answerCbQuery('⏳ جاري الحذف...');
-                await recursiveDeleteButton(targetId);
+                const buttonToDeletePath = `${currentPath}/${targetId}`;
+                await recursiveDeleteButton(buttonToDeletePath);
                 await ctx.editMessageText('✅ تم حذف الزر وكل محتوياته.');
                 return ctx.reply('تم تحديث القائمة.', Markup.keyboard(await generateKeyboard(userId)).resize());
             }
