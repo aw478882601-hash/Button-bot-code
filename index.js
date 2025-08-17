@@ -471,13 +471,15 @@ const mainMessageHandler = async (ctx) => {
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
                 // START: MODIFICATION - بداية التعديل
                 const inlineKb = [[
-                    Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
-                    Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`),
-                ],[
-                    Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('▶️', 'btn:right:'+buttonId),
-                    Markup.button.callback('🔒', 'btn:adminonly:'+buttonId), Markup.button.callback('📊', 'btn:stats:'+buttonId)
-                ],[
-                    Markup.button.callback('🔄 تحديث عرض الأزرار', `btn:refresh_keyboard:${buttonId}`)
+                    Markup.button.callback('✏️', `btn:rename:${buttonId}`),
+                    Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
+                    Markup.button.callback('🔼', `btn:up:${buttonId}`),
+                    Markup.button.callback('🔽', `btn:down:${buttonId}`),
+                    Markup.button.callback('◀️', `btn:left:${buttonId}`),
+                    Markup.button.callback('▶️', `btn:right:${buttonId}`),
+                    Markup.button.callback('🔒', `btn:adminonly:${buttonId}`),
+                    Markup.button.callback('📊', `btn:stats:${buttonId}`),
+                    Markup.button.callback('🔄', `btn:refresh_keyboard:${buttonId}`)
                 ]];
                 // END: MODIFICATION - نهاية التعديل
                 return ctx.reply( `خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
@@ -571,7 +573,6 @@ bot.on('callback_query', async (ctx) => {
                 const buttonToDeletePath = `${currentPath}/${targetId}`;
                 await recursiveDeleteButton(buttonToDeletePath);
                 await ctx.answerCbQuery('✅ تم الحذف بنجاح');
-                await ctx.editMessageText('✅ تم الحذف. اضغط "🔄" للتحديث.');
                 return;
             }
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
@@ -594,11 +595,9 @@ bot.on('callback_query', async (ctx) => {
                     });
                     await batch.commit();
                     await ctx.answerCbQuery('✅ تم تحديث الترتيب');
-                    await ctx.editMessageText('✅ تم تحديث الترتيب. اضغط "🔄" للتحديث.');
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
-            // START: MODIFICATION - بداية التعديل
             if (subAction === 'refresh_keyboard') {
                 await ctx.answerCbQuery('🔄 جارٍ تحديث لوحة المفاتيح...');
                 await ctx.deleteMessage().catch(() => {});
@@ -608,7 +607,6 @@ bot.on('callback_query', async (ctx) => {
                 );
                 return;
             }
-            // END: MODIFICATION - نهاية التعديل
             if (subAction === 'adminonly' || subAction === 'stats') {
                // Logic remains unchanged
             }
