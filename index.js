@@ -519,8 +519,9 @@ bot.on('callback_query', async (ctx) => {
                 const buttonToDeletePath = `${currentPath}/${targetId}`;
                 await recursiveDeleteButton(buttonToDeletePath);
                 await ctx.answerCbQuery();
-                await ctx.reply('✅ تم الحذف بنجاح. إليك القائمة المحدثة:', Markup.keyboard(await generateKeyboard(userId)).resize());
                 await ctx.deleteMessage().catch(() => {});
+                // **التعديل هنا: إرسال رسالة تأكيد مع القائمة المحدثة**
+                await ctx.reply('✅ تم الحذف بنجاح. القائمة تم تحديثها.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
             }
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
@@ -543,8 +544,9 @@ bot.on('callback_query', async (ctx) => {
                     });
                     await batch.commit();
                     await ctx.answerCbQuery();
-                    await ctx.reply('✅ تم تحديث الترتيب. إليك القائمة الجديدة:', Markup.keyboard(await generateKeyboard(userId)).resize());
                     await ctx.deleteMessage().catch(() => {});
+                    // **التعديل هنا: إرسال رسالة تأكيد مع القائمة المحدثة**
+                    await ctx.reply('✅ تم تحديث الترتيب. القائمة تم تحديثها.', Markup.keyboard(await generateKeyboard(userId)).resize());
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
@@ -582,10 +584,8 @@ bot.on('callback_query', async (ctx) => {
                 await batch.commit();
                 
                 await ctx.answerCbQuery();
-                await ctx.reply('✅ تم حذف الرسالة.');
                 await ctx.deleteMessage().catch(() => {});
-                
-                // التعديل: استخدام await لضمان التنفيذ الفوري
+                // **التعديل هنا: إرسال القائمة المحدثة فقط (بدون رسالة تأكيد)**
                 await sendButtonMessages(ctx, buttonId, true);
                 return;
             }
@@ -620,10 +620,8 @@ bot.on('callback_query', async (ctx) => {
                     await batch.commit();
                     
                     await ctx.answerCbQuery();
-                    await ctx.reply('✅ تم تحديث ترتيب الرسائل.');
                     await ctx.deleteMessage().catch(() => {});
-
-                    // التعديل: استخدام await لضمان التنفيذ الفوري
+                    // **التعديل هنا: إرسال القائمة المحدثة فقط (بدون رسالة تأكيد)**
                     await sendButtonMessages(ctx, buttonId, true);
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
