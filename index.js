@@ -380,28 +380,32 @@ const mainMessageHandler = async (ctx) => {
                     return;
                 }
             }
-            if(state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
-                 const adminsDoc = await db.collection('config').doc('admins').get();
-                 const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
-                 if (adminIds.length === 0) {
-                      await userRef.update({ state: 'NORMAL' });
-                      return ctx.reply('⚠️ عذراً، لا يوجد مشرفون متاحون حالياً لتلقي رسالتك.');
-                 }
-                 const from = ctx.from;
-                 const messagePrefix = state === 'REPLYING_TO_ADMIN' ? '📝 <b>رد من مستخدم!</b>' : '👤 <b>رسالة جديدة من مستخدم!</b>';
-                 const userDetails = `${messagePrefix}\n\n<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}\n<b>المعرف:</b> @${from.username || 'لا يوجد'}\n<b>ID:</b> <code>${from.id}</code>`;
-                 for (const adminId of adminIds) {
-                     try {
-                         const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ رد', `admin:reply:${from.id}`), Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`) ]] };
-                         await bot.telegram.sendMessage(adminId, userDetails, { parse_mode: 'HTML', reply_markup: replyMarkup });
-                         await ctx.copyMessage(adminId);
-                     } catch(e) { console.error(`Failed to send message to admin ${adminId}:`, e); }
-                 }
-                 await userRef.update({ state: 'NORMAL' });
-                 return ctx.reply('✅ تم إرسال رسالتك إلى الإدارة بنجاح.');
-            }
-            return;
+             // The CONTACTING_ADMIN block was moved from here...
+            return; // This return is crucial for AWAITING states
         }
+        
+        // START: CORRECT PLACEMENT FOR CONTACTING ADMIN LOGIC
+        if(state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
+             const adminsDoc = await db.collection('config').doc('admins').get();
+             const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
+             if (adminIds.length === 0) {
+                  await userRef.update({ state: 'NORMAL' });
+                  return ctx.reply('⚠️ عذراً، لا يوجد مشرفون متاحون حالياً لتلقي رسالتك.');
+             }
+             const from = ctx.from;
+             const messagePrefix = state === 'REPLYING_TO_ADMIN' ? '📝 <b>رد من مستخدم!</b>' : '👤 <b>رسالة جديدة من مستخدم!</b>';
+             const userDetails = `${messagePrefix}\n\n<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}\n<b>المعرف:</b> @${from.username || 'لا يوجد'}\n<b>ID:</b> <code>${from.id}</code>`;
+             for (const adminId of adminIds) {
+                 try {
+                     const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ رد', `admin:reply:${from.id}`), Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`) ]] };
+                     await bot.telegram.sendMessage(adminId, userDetails, { parse_mode: 'HTML', reply_markup: replyMarkup });
+                     await ctx.copyMessage(adminId);
+                 } catch(e) { console.error(`Failed to send message to admin ${adminId}:`, e); }
+             }
+             await userRef.update({ state: 'NORMAL' });
+             return ctx.reply('✅ تم إرسال رسالتك إلى الإدارة بنجاح.');
+        }
+        // END: CORRECT PLACEMENT
         
         if (!ctx.message || !ctx.message.text) return; 
         const text = ctx.message.text;
