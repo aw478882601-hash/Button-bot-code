@@ -462,7 +462,6 @@ const mainMessageHandler = async (ctx) => {
 };
 
 bot.on('message', mainMessageHandler);
-
 bot.on('callback_query', async (ctx) => {
     try {
         const userId = String(ctx.from.id);
@@ -581,10 +580,14 @@ bot.on('callback_query', async (ctx) => {
                 const batch = db.batch();
                 remainingMsgs.docs.forEach((doc, i) => batch.update(doc.ref, { order: i }));
                 await batch.commit();
+                
                 await ctx.answerCbQuery();
                 await ctx.reply('✅ تم حذف الرسالة.');
                 await ctx.deleteMessage().catch(() => {});
-                return sendButtonMessages(ctx, buttonId, true);
+                
+                // التعديل: استخدام await لضمان التنفيذ الفوري
+                await sendButtonMessages(ctx, buttonId, true);
+                return;
             }
             if (subAction === 'edit') {
                 const messageToEdit = messageDoc.data();
@@ -615,10 +618,14 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(msgRef, { order: i });
                     });
                     await batch.commit();
+                    
                     await ctx.answerCbQuery();
                     await ctx.reply('✅ تم تحديث ترتيب الرسائل.');
                     await ctx.deleteMessage().catch(() => {});
-                    return sendButtonMessages(ctx, buttonId, true);
+
+                    // التعديل: استخدام await لضمان التنفيذ الفوري
+                    await sendButtonMessages(ctx, buttonId, true);
+                    return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
             if (subAction === 'addnext') {
