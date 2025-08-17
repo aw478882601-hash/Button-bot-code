@@ -470,17 +470,23 @@ const mainMessageHandler = async (ctx) => {
             } else {
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
                 // START: MODIFICATION - بداية التعديل
-                const inlineKb = [[
-                    Markup.button.callback('✏️', `btn:rename:${buttonId}`),
-                    Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
-                    Markup.button.callback('🔼', `btn:up:${buttonId}`),
-                    Markup.button.callback('🔽', `btn:down:${buttonId}`),
-                    Markup.button.callback('◀️', `btn:left:${buttonId}`),
-                    Markup.button.callback('▶️', `btn:right:${buttonId}`),
-                    Markup.button.callback('🔒', `btn:adminonly:${buttonId}`),
-                    Markup.button.callback('📊', `btn:stats:${buttonId}`),
-                    Markup.button.callback('🔄', `btn:refresh_keyboard:${buttonId}`)
-                ]];
+                const inlineKb = [
+                    [
+                        Markup.button.callback('✏️', `btn:rename:${buttonId}`),
+                        Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
+                        Markup.button.callback('📊', `btn:stats:${buttonId}`),
+                        Markup.button.callback('🔒', `btn:adminonly:${buttonId}`)
+                    ],
+                    [
+                        Markup.button.callback('⏪', `btn:left:${buttonId}`),
+                        Markup.button.callback('🔼', `btn:up:${buttonId}`),
+                        Markup.button.callback('🔽', `btn:down:${buttonId}`),
+                        Markup.button.callback('⏩', `btn:right:${buttonId}`)
+                    ],
+                    [
+                        Markup.button.callback('🔄 تحديث لوحة المفاتيح', `btn:refresh_keyboard:${buttonId}`)
+                    ]
+                ];
                 // END: MODIFICATION - نهاية التعديل
                 return ctx.reply( `خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
@@ -575,19 +581,31 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.answerCbQuery('✅ تم الحذف بنجاح');
                 return;
             }
+            // START: MODIFICATION - بداية التعديل
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
                 let buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 const index = buttonList.findIndex(b => b.id === targetId);
                 if (index === -1) return ctx.answerCbQuery('خطأ');
-                let swapIndex = -1;
-                if (subAction === 'up' && index >= 2) swapIndex = index - 2;
-                else if (subAction === 'down' && index < buttonList.length - 2) swapIndex = index + 2;
-                else if (subAction === 'left' && index % 2 === 1) swapIndex = index - 1;
-                else if (subAction === 'right' && index % 2 === 0 && index < buttonList.length - 1) swapIndex = index + 1;
+
+                let didMove = false;
+                if (subAction === 'up' && index > 0) { // Move up by one
+                    [buttonList[index], buttonList[index - 1]] = [buttonList[index - 1], buttonList[index]];
+                    didMove = true;
+                } else if (subAction === 'down' && index < buttonList.length - 1) { // Move down by one
+                    [buttonList[index], buttonList[index + 1]] = [buttonList[index + 1], buttonList[index]];
+                    didMove = true;
+                } else if (subAction === 'left' && index > 0) { // Move to top
+                    const item = buttonList.splice(index, 1)[0];
+                    buttonList.unshift(item);
+                    didMove = true;
+                } else if (subAction === 'right' && index < buttonList.length - 1) { // Move to bottom
+                    const item = buttonList.splice(index, 1)[0];
+                    buttonList.push(item);
+                    didMove = true;
+                }
                 
-                if (swapIndex !== -1 && swapIndex >= 0 && swapIndex < buttonList.length) {
-                    [buttonList[index], buttonList[swapIndex]] = [buttonList[swapIndex], buttonList[index]];
+                if (didMove) {
                     const batch = db.batch();
                     buttonList.forEach((button, i) => {
                         const buttonRef = db.collection('buttons').doc(button.id);
@@ -595,8 +613,10 @@ bot.on('callback_query', async (ctx) => {
                     });
                     await batch.commit();
                     await ctx.answerCbQuery('✅ تم تحديث الترتيب');
-                    return;
-                } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
+                } else { 
+                    await ctx.answerCbQuery('لا يمكن التحريك'); 
+                }
+                return;
             }
             if (subAction === 'refresh_keyboard') {
                 await ctx.answerCbQuery('🔄 جارٍ تحديث لوحة المفاتيح...');
@@ -607,9 +627,26 @@ bot.on('callback_query', async (ctx) => {
                 );
                 return;
             }
-            if (subAction === 'adminonly' || subAction === 'stats') {
-               // Logic remains unchanged
+            if (subAction === 'adminonly') {
+                const buttonDoc = await db.collection('buttons').doc(targetId).get();
+                const adminOnly = !buttonDoc.data().adminOnly;
+                await db.collection('buttons').doc(targetId).update({ adminOnly });
+                return ctx.answerCbQuery(`الزر الآن ${adminOnly ? 'للمشرفين فقط' : 'للجميع'}`);
             }
+            if (subAction === 'stats') {
+                const buttonDoc = await db.collection('buttons').doc(targetId).get();
+                if (!buttonDoc.exists) return ctx.answerCbQuery('الزر غير موجود.');
+                const stats = buttonDoc.data().stats || {};
+                const today = new Date().toISOString().split('T')[0];
+                const totalClicks = stats.totalClicks || 0;
+                const dailyClicks = stats.dailyClicks ? (stats.dailyClicks[today] || 0) : 0;
+                const totalUsers = stats.totalUsers ? stats.totalUsers.length : 0;
+                const dailyUsers = stats.dailyUsers && stats.dailyUsers[today] ? stats.dailyUsers[today].length : 0;
+                const statsMessage = `📊 <b>إحصائيات الزر:</b>\n\n` + `👆 <b>الضغطات:</b>\n` + `  - اليوم: <code>${dailyClicks}</code>\n` + `  - الكلي: <code>${totalClicks}</code>\n\n` + `👤 <b>المستخدمون:</b>\n` + `  - اليوم: <code>${dailyUsers}</code>\n` + `  - الكلي: <code>${totalUsers}</code>`;
+                await ctx.answerCbQuery();
+                return ctx.replyWithHTML(statsMessage);
+            }
+            // END: MODIFICATION - نهاية التعديل
         }
 
         if (action === 'msg') {
