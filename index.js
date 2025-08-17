@@ -270,12 +270,12 @@ const mainMessageHandler = async (ctx) => {
                         case 'AWAITING_MSG_CAPTION':
                             await db.collection('messages').doc(stateData.messageId).update({ caption: text, entities: ctx.message.caption_entities || [] });
                             await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                            await clearAndResendMessages(ctx, userId, stateData.buttonId);
+                            await ctx.reply('✅ تم تعديل الشرح بنجاح. اضغط "تحديث العرض" لرؤية التغييرات.');
                             return;
                         case 'AWAITING_TEXT_MESSAGE_EDIT':
                             await db.collection('messages').doc(stateData.messageId).update({ content: text, entities: ctx.message.entities || [] });
                             await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                            await clearAndResendMessages(ctx, userId, stateData.buttonId);
+                            await ctx.reply('✅ تم تعديل الرسالة بنجاح. اضغط "تحديث العرض" لرؤية التغييرات.');
                             return;
                         case 'AWAITING_BROADCAST':
                             const users = await db.collection('users').get();
@@ -324,7 +324,7 @@ const mainMessageHandler = async (ctx) => {
                         await db.collection('messages').add({ buttonId, type, content: fileId, caption, entities: caption_entities, order: newMsgOrder });
                     }
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    await clearAndResendMessages(ctx, userId, buttonId);
+                    await ctx.reply('✅ تمت إضافة الرسالة بنجاح. اضغط "تحديث العرض" لرؤيتها.');
                     return;
                 }
                 if (state === 'AWAITING_MSG_CAPTION' && ctx.message && !ctx.message.text) {
@@ -335,7 +335,7 @@ const mainMessageHandler = async (ctx) => {
                     else return;
                     await db.collection('messages').doc(stateData.messageId).update({ type, content: fileId, caption, entities: caption_entities });
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    await clearAndResendMessages(ctx, userId, stateData.buttonId);
+                    await ctx.reply('✅ تم استبدال الملف بنجاح. اضغط "تحديث العرض" لرؤية التغييرات.');
                     return;
                 }
             }
@@ -570,12 +570,9 @@ bot.on('callback_query', async (ctx) => {
                 return;
             }
             if (subAction === 'delete') {
-                await ctx.answerCbQuery('جاري الحذف...');
                 const buttonToDeletePath = `${currentPath}/${targetId}`;
                 await recursiveDeleteButton(buttonToDeletePath);
-                await ctx.editMessageText('✅ تم الحذف بنجاح.');
-                // We also need to resend the main keyboard to reflect the change
-                await ctx.reply('تم تحديث قائمة الأزرار.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                await ctx.answerCbQuery('✅ تم الحذف بنجاح', { show_alert: false });
                 return;
             }
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
@@ -597,9 +594,7 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(buttonRef, { order: i });
                     });
                     await batch.commit();
-                    await ctx.answerCbQuery('✅ تم تحديث الترتيب');
-                    // Refresh the main keyboard to show the new order
-                    await ctx.reply('تم تحديث ترتيب الأزرار.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    await ctx.answerCbQuery('✅ تم تحديث الترتيب', { show_alert: false });
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
@@ -619,10 +614,7 @@ bot.on('callback_query', async (ctx) => {
                 const batch = db.batch();
                 remainingMsgs.docs.forEach((doc, i) => batch.update(doc.ref, { order: i }));
                 await batch.commit();
-                
-                await ctx.answerCbQuery('✅ تم الحذف');
-                await ctx.editMessageText('⏳ جارٍ تحديث العرض...');
-                await clearAndResendMessages(ctx, userId, buttonId);
+                await ctx.answerCbQuery('✅ تم الحذف بنجاح', { show_alert: false });
                 return;
             }
             if (subAction === 'edit') {
@@ -654,10 +646,7 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(msgRef, { order: i });
                     });
                     await batch.commit();
-                    
-                    await ctx.answerCbQuery('✅ تم تحديث الترتيب');
-                    await ctx.editMessageText('⏳ جارٍ تحديث العرض...');
-                    await clearAndResendMessages(ctx, userId, buttonId);
+                    await ctx.answerCbQuery('✅ تم تحديث الترتيب بنجاح', { show_alert: false });
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
