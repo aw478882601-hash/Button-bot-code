@@ -173,6 +173,44 @@ async function recursiveDeleteButton(buttonPath) {
 }
 
 // =================================================================
+// |      START: NEW & IMPROVED HELPER FUNCTIONS (الدوال الجديدة)      |
+// =================================================================
+
+async function updateButtonsView(ctx, messageText) {
+  try {
+    const userId = String(ctx.from.id);
+    const newKeyboard = await generateKeyboard(userId);
+    if (ctx.callbackQuery) {
+      await ctx.deleteMessage().catch(() => {});
+    }
+    await ctx.reply(messageText, Markup.keyboard(newKeyboard).resize());
+  } catch (error) {
+    console.error("Error in updateButtonsView:", error);
+    await ctx.reply("حدث خطأ أثناء تحديث القائمة.");
+  }
+}
+
+async function updateMessagesView(ctx, buttonId) {
+  try {
+    if (ctx.callbackQuery) {
+      await ctx.deleteMessage().catch(() => {});
+    }
+    // You can add logic here to delete all old messages displayed before sending new ones to avoid duplication
+    // ...
+
+    // Then we re-send the entire updated list
+    await sendButtonMessages(ctx, buttonId, true);
+  } catch (error) {
+    console.error("Error in updateMessagesView:", error);
+  }
+}
+
+// =================================================================
+// |       END: NEW & IMPROVED HELPER FUNCTIONS (الدوال الجديدة)       |
+// =================================================================
+
+
+// =================================================================
 // |                      Bot Commands & Logic                     |
 // =================================================================
 
@@ -531,11 +569,13 @@ bot.on('callback_query', async (ctx) => {
                 return ctx.reply('أدخل الاسم الجديد:');
             }
             if (subAction === 'delete') {
+                // Step 1: Respond to user immediately
+                await ctx.answerCbQuery('جاري حذف الزر...');
+                // Step 2: Perform database operation
                 const buttonToDeletePath = `${currentPath}/${targetId}`;
                 await recursiveDeleteButton(buttonToDeletePath);
-                await ctx.answerCbQuery();
-                await ctx.deleteMessage().catch(() => {});
-                await ctx.reply('✅ تم الحذف بنجاح. القائمة تم تحديثها.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                // Step 3: Update the view using the new function
+                await updateButtonsView(ctx, '✅ تم الحذف بنجاح. تم تحديث القائمة.');
                 return;
             }
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
@@ -543,6 +583,7 @@ bot.on('callback_query', async (ctx) => {
                 let buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 const index = buttonList.findIndex(b => b.id === targetId);
                 if (index === -1) return ctx.answerCbQuery('خطأ');
+                
                 let swapIndex = -1;
                 if (subAction === 'up' && index >= 2) swapIndex = index - 2;
                 else if (subAction === 'down' && index < buttonList.length - 2) swapIndex = index + 2;
@@ -550,6 +591,9 @@ bot.on('callback_query', async (ctx) => {
                 else if (subAction === 'right' && index % 2 === 0 && index < buttonList.length - 1) swapIndex = index + 1;
                 
                 if (swapIndex !== -1 && swapIndex >= 0 && swapIndex < buttonList.length) {
+                    // Step 1: Respond to user immediately
+                    await ctx.answerCbQuery('جاري تحديث الترتيب...');
+                    // Step 2: Perform database operation
                     [buttonList[index], buttonList[swapIndex]] = [buttonList[swapIndex], buttonList[index]];
                     const batch = db.batch();
                     buttonList.forEach((button, i) => {
@@ -557,11 +601,12 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(buttonRef, { order: i });
                     });
                     await batch.commit();
-                    await ctx.answerCbQuery();
-                    await ctx.deleteMessage().catch(() => {});
-                    await ctx.reply('✅ تم تحديث الترتيب. القائمة تم تحديثها.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    // Step 3: Update the view using the new function
+                    await updateButtonsView(ctx, '✅ تم تحديث الترتيب بنجاح.');
                     return;
-                } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
+                } else { 
+                    return ctx.answerCbQuery('لا يمكن التحريك'); 
+                }
             }
             if (subAction === 'adminonly') {
                 const buttonDoc = await db.collection('buttons').doc(targetId).get();
@@ -590,14 +635,16 @@ bot.on('callback_query', async (ctx) => {
             const { buttonId } = messageDoc.data();
 
             if (subAction === 'delete') {
+                // Step 1: Respond to user immediately
+                await ctx.answerCbQuery('جاري حذف الرسالة...');
+                // Step 2: Perform database operation
                 await db.collection('messages').doc(targetId).delete();
                 const remainingMsgs = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
                 const batch = db.batch();
                 remainingMsgs.docs.forEach((doc, i) => batch.update(doc.ref, { order: i }));
                 await batch.commit();
-                await ctx.answerCbQuery();
-                await ctx.deleteMessage().catch(() => {});
-                await sendButtonMessages(ctx, buttonId, true);
+                // Step 3: Update the view using the new function
+                await updateMessagesView(ctx, buttonId);
                 return;
             }
             if (subAction === 'edit') {
@@ -622,6 +669,9 @@ bot.on('callback_query', async (ctx) => {
                 else if (subAction === 'down' && currentIndex < messageList.length - 1) targetIndex = currentIndex + 1;
 
                 if (targetIndex !== -1) {
+                    // Step 1: Respond to user immediately
+                    await ctx.answerCbQuery('جاري تحديث الترتيب...');
+                    // Step 2: Perform database operation
                     [messageList[currentIndex], messageList[targetIndex]] = [messageList[targetIndex], messageList[currentIndex]];
                     const batch = db.batch();
                     messageList.forEach((msg, i) => {
@@ -629,11 +679,12 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(msgRef, { order: i });
                     });
                     await batch.commit();
-                    await ctx.answerCbQuery();
-                    await ctx.deleteMessage().catch(() => {});
-                    await sendButtonMessages(ctx, buttonId, true);
+                    // Step 3: Update the view using the new function
+                    await updateMessagesView(ctx, buttonId);
                     return;
-                } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
+                } else { 
+                    return ctx.answerCbQuery('لا يمكن التحريك'); 
+                }
             }
             if (subAction === 'addnext') {
                 const msg = messageDoc.data();
