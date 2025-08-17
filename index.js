@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V22 - FINAL WORKING VERSION       |
+// |   TELEGRAM FIREBASE BOT - V23 - FINAL ROOT CAUSE FIX        |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -244,12 +244,24 @@ const mainMessageHandler = async (ctx) => {
                     const text = ctx.message.text;
                     switch (state) {
                         case 'AWAITING_NEW_BUTTON_NAME':
-                            const existing = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).get();
+                            // FIX: Extract the correct parentId from the path
+                            const pathSegments = currentPath.split('/');
+                            const correctParentId = pathSegments[pathSegments.length - 1];
+
+                            const existing = await db.collection('buttons').where('parentId', '==', correctParentId).where('text', '==', text).get();
                             if (!existing.empty) return ctx.reply('الاسم موجود مسبقاً.');
-                            const count = (await db.collection('buttons').where('parentId', '==', currentPath).get()).size;
-                            await db.collection('buttons').add({ text, parentId: currentPath, order: count, adminOnly: false, stats: {} });
+                            
+                            const count = (await db.collection('buttons').where('parentId', '==', correctParentId).get()).size;
+                            
+                            await db.collection('buttons').add({
+                                text,
+                                parentId: correctParentId, // <-- Use the corrected parentId
+                                order: count,
+                                adminOnly: false,
+                                stats: {} 
+                            });
                             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                            return ctx.reply('✅ تم إضافة الزر.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                            return ctx.reply('✅ تم إضافة الزر بنجاح.', Markup.keyboard(await generateKeyboard(userId)).resize());
                         case 'AWAITING_RENAME':
                             await db.collection('buttons').doc(stateData.buttonId).update({ text });
                             await userRef.update({ state: 'NORMAL', stateData: {} });
