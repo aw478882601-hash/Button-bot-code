@@ -476,7 +476,6 @@ const mainMessageHandler = async (ctx) => {
 };
 
 bot.on('message', mainMessageHandler);
-
 bot.on('callback_query', async (ctx) => {
     try {
         const userId = String(ctx.from.id);
@@ -496,6 +495,7 @@ bot.on('callback_query', async (ctx) => {
         
         const { currentPath } = userDoc.data();
 
+        // -------------------- admin actions --------------------
         if (action === 'admin') {
             await ctx.answerCbQuery();
             if (subAction === 'reply') {
@@ -524,6 +524,7 @@ bot.on('callback_query', async (ctx) => {
             }
         }
 
+        // -------------------- button actions --------------------
         if (action === 'btn') {
             if (subAction === 'rename') {
                 await userRef.update({ state: 'AWAITING_RENAME', stateData: { buttonId: targetId } });
@@ -535,8 +536,8 @@ bot.on('callback_query', async (ctx) => {
                 await recursiveDeleteButton(buttonToDeletePath);
                 await ctx.answerCbQuery();
                 await ctx.deleteMessage().catch(() => {});
-                await ctx.reply('✅ تم الحذف بنجاح. القائمة تم تحديثها.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                return;
+                await ctx.reply('✅ تم الحذف بنجاح.');
+                return refreshKeyboard(ctx, userId);
             }
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
@@ -559,8 +560,8 @@ bot.on('callback_query', async (ctx) => {
                     await batch.commit();
                     await ctx.answerCbQuery();
                     await ctx.deleteMessage().catch(() => {});
-                    await ctx.reply('✅ تم تحديث الترتيب. القائمة تم تحديثها.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                    return;
+                    await ctx.reply('✅ تم تحديث الترتيب.');
+                    return refreshKeyboard(ctx, userId);
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
             if (subAction === 'adminonly') {
@@ -578,12 +579,19 @@ bot.on('callback_query', async (ctx) => {
                 const dailyClicks = stats.dailyClicks ? (stats.dailyClicks[today] || 0) : 0;
                 const totalUsers = stats.totalUsers ? stats.totalUsers.length : 0;
                 const dailyUsers = stats.dailyUsers && stats.dailyUsers[today] ? stats.dailyUsers[today].length : 0;
-                const statsMessage = `📊 <b>إحصائيات الزر:</b>\n\n` + `👆 <b>الضغطات:</b>\n` + `  - اليوم: <code>${dailyClicks}</code>\n` + `  - الكلي: <code>${totalClicks}</code>\n\n` + `👤 <b>المستخدمون:</b>\n` + `  - اليوم: <code>${dailyUsers}</code>\n` + `  - الكلي: <code>${totalUsers}</code>`;
+                const statsMessage = `📊 <b>إحصائيات الزر:</b>\n\n` + 
+                    `👆 <b>الضغطات:</b>\n` + 
+                    `  - اليوم: <code>${dailyClicks}</code>\n` + 
+                    `  - الكلي: <code>${totalClicks}</code>\n\n` + 
+                    `👤 <b>المستخدمون:</b>\n` + 
+                    `  - اليوم: <code>${dailyUsers}</code>\n` + 
+                    `  - الكلي: <code>${totalUsers}</code>`;
                 await ctx.answerCbQuery();
                 return ctx.replyWithHTML(statsMessage);
             }
         }
 
+        // -------------------- message actions --------------------
         if (action === 'msg') {
             const messageDoc = await db.collection('messages').doc(targetId).get();
             if(!messageDoc.exists) return ctx.answerCbQuery('الرسالة غير موجودة');
@@ -597,8 +605,7 @@ bot.on('callback_query', async (ctx) => {
                 await batch.commit();
                 await ctx.answerCbQuery();
                 await ctx.deleteMessage().catch(() => {});
-                await sendButtonMessages(ctx, buttonId, true);
-                return;
+                return refreshMessages(ctx, buttonId);
             }
             if (subAction === 'edit') {
                 const messageToEdit = messageDoc.data();
@@ -631,8 +638,7 @@ bot.on('callback_query', async (ctx) => {
                     await batch.commit();
                     await ctx.answerCbQuery();
                     await ctx.deleteMessage().catch(() => {});
-                    await sendButtonMessages(ctx, buttonId, true);
-                    return;
+                    return refreshMessages(ctx, buttonId);
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
             if (subAction === 'addnext') {
@@ -648,6 +654,26 @@ bot.on('callback_query', async (ctx) => {
         await ctx.answerCbQuery("حدث خطأ فادح.", { show_alert: true });
     }
 });
+
+// ✅ دالة لتحديث الكيبورد بعد أي تعديل
+async function refreshKeyboard(ctx, userId, message = '📋 القائمة بعد التحديث:') {
+    try {
+        await ctx.reply(message, Markup.keyboard(await generateKeyboard(userId)).resize());
+    } catch (e) {
+        console.error("Error in refreshKeyboard:", e.message);
+    }
+}
+
+// ✅ دالة لتحديث الرسائل بعد أي تعديل
+async function refreshMessages(ctx, buttonId) {
+    try {
+        await ctx.reply("🔄 جاري تحديث الرسائل...");
+        await sendButtonMessages(ctx, buttonId, true);
+    } catch (e) {
+        console.error("Error in refreshMessages:", e.message);
+    }
+}
+
 
 // --- Vercel Webhook Setup ---
 module.exports = async (req, res) => {
