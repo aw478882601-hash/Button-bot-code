@@ -53,15 +53,30 @@ async function generateKeyboard(userId) {
 
     const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
 
+    // START: MODIFICATION - بداية تعديل منطق عرض الأزرار
     let currentRow = [];
     buttonsSnapshot.forEach(doc => {
       const button = doc.data();
       if (!button.adminOnly || isAdmin) {
-        currentRow.push(button.text);
-        if (currentRow.length === 2) { keyboardRows.push(currentRow); currentRow = []; }
+        if (button.isFullWidth) {
+            if (currentRow.length > 0) {
+                keyboardRows.push(currentRow);
+            }
+            keyboardRows.push([button.text]);
+            currentRow = [];
+        } else {
+            currentRow.push(button.text);
+            if (currentRow.length === 2) {
+                keyboardRows.push(currentRow);
+                currentRow = [];
+            }
+        }
       }
     });
-    if (currentRow.length > 0) keyboardRows.push(currentRow);
+    if (currentRow.length > 0) {
+        keyboardRows.push(currentRow);
+    }
+    // END: MODIFICATION - نهاية تعديل منطق عرض الأزرار
 
     if (isAdmin) {
       const adminActionRow = [];
@@ -247,7 +262,7 @@ const mainMessageHandler = async (ctx) => {
                             const existing = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).get();
                             if (!existing.empty) return ctx.reply('الاسم موجود مسبقاً.');
                             const count = (await db.collection('buttons').where('parentId', '==', currentPath).get()).size;
-                            await db.collection('buttons').add({ text, parentId: currentPath, order: count, adminOnly: false, stats: {} });
+                            await db.collection('buttons').add({ text, parentId: currentPath, order: count, adminOnly: false, isFullWidth: false, stats: {} });
                             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                             return ctx.reply('✅ تم إضافة الزر.', Markup.keyboard(await generateKeyboard(userId)).resize());
                         case 'AWAITING_RENAME':
@@ -469,25 +484,17 @@ const mainMessageHandler = async (ctx) => {
                 return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
-                // START: MODIFICATION - بداية التعديل
-                const inlineKb = [
-                    [
-                        Markup.button.callback('✏️', `btn:rename:${buttonId}`),
-                        Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
-                        Markup.button.callback('📊', `btn:stats:${buttonId}`),
-                        Markup.button.callback('🔒', `btn:adminonly:${buttonId}`)
-                    ],
-                    [
-                        Markup.button.callback('⏪', `btn:left:${buttonId}`),
-                        Markup.button.callback('🔼', `btn:up:${buttonId}`),
-                        Markup.button.callback('🔽', `btn:down:${buttonId}`),
-                        Markup.button.callback('⏩', `btn:right:${buttonId}`)
-                    ],
-                    [
-                        Markup.button.callback('🔄 تحديث لوحة المفاتيح', `btn:refresh_keyboard:${buttonId}`)
-                    ]
-                ];
-                // END: MODIFICATION - نهاية التعديل
+                // START: MODIFICATION - بداية تعديل لوحة التحكم
+                const inlineKb = [[
+                    Markup.button.callback('✏️', `btn:rename:${buttonId}`),
+                    Markup.button.callback('🗑️', `btn:delete:${buttonId}`),
+                    Markup.button.callback('🔼', `btn:up:${buttonId}`),
+                    Markup.button.callback('🔽', `btn:down:${buttonId}`),
+                    Markup.button.callback('↔️', `btn:toggle_width:${buttonId}`),
+                    Markup.button.callback('🔒', `btn:adminonly:${buttonId}`),
+                    Markup.button.callback('📊', `btn:stats:${buttonId}`)
+                ]];
+                // END: MODIFICATION - نهاية تعديل لوحة التحكم
                 return ctx.reply( `خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
         }
@@ -579,54 +586,100 @@ bot.on('callback_query', async (ctx) => {
                 const buttonToDeletePath = `${currentPath}/${targetId}`;
                 await recursiveDeleteButton(buttonToDeletePath);
                 await ctx.answerCbQuery('✅ تم الحذف بنجاح');
+                // Auto-refresh the keyboard after delete
+                await ctx.deleteMessage().catch(()=>{});
+                await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
             }
-            // START: MODIFICATION - بداية التعديل
-            if (['up', 'down', 'left', 'right'].includes(subAction)) {
+            // START: MODIFICATION - بداية تعديل منطق التحريك الذكي
+            if (subAction === 'up' || subAction === 'down') {
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
-                let buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                const index = buttonList.findIndex(b => b.id === targetId);
-                if (index === -1) return ctx.answerCbQuery('خطأ');
+                let buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
+                const currentIndex = buttonList.findIndex(b => b.id === targetId);
+                if (currentIndex === -1) return ctx.answerCbQuery('!خطأ');
 
-                let didMove = false;
-                if (subAction === 'up' && index > 0) { // Move up by one
-                    [buttonList[index], buttonList[index - 1]] = [buttonList[index - 1], buttonList[index]];
-                    didMove = true;
-                } else if (subAction === 'down' && index < buttonList.length - 1) { // Move down by one
-                    [buttonList[index], buttonList[index + 1]] = [buttonList[index + 1], buttonList[index]];
-                    didMove = true;
-                } else if (subAction === 'left' && index > 0) { // Move to top
-                    const item = buttonList.splice(index, 1)[0];
-                    buttonList.unshift(item);
-                    didMove = true;
-                } else if (subAction === 'right' && index < buttonList.length - 1) { // Move to bottom
-                    const item = buttonList.splice(index, 1)[0];
-                    buttonList.push(item);
-                    didMove = true;
+                const batch = db.batch();
+                let actionTaken = false;
+
+                // Reconstruct rows to understand layout
+                let rows = [];
+                let currentRow = [];
+                buttonList.forEach(btn => {
+                    if (btn.isFullWidth) {
+                        if (currentRow.length > 0) rows.push(currentRow);
+                        rows.push([btn]);
+                        currentRow = [];
+                    } else {
+                        currentRow.push(btn);
+                        if (currentRow.length === 2) {
+                            rows.push(currentRow);
+                            currentRow = [];
+                        }
+                    }
+                });
+                if (currentRow.length > 0) rows.push(currentRow);
+
+                let { rowIndex, colIndex } = (-1,-1);
+                for(let r=0; r < rows.length; r++){
+                    let c = rows[r].findIndex(b => b.id === targetId);
+                    if(c !== -1) { rowIndex = r; colIndex = c; break; }
                 }
-                
-                if (didMove) {
-                    const batch = db.batch();
-                    buttonList.forEach((button, i) => {
-                        const buttonRef = db.collection('buttons').doc(button.id);
-                        batch.update(buttonRef, { order: i });
-                    });
+
+                if (subAction === 'down') {
+                    if (rows[rowIndex].length === 2 && colIndex === 0) {
+                        // Split action
+                        batch.update(rows[rowIndex][0].ref, { isFullWidth: true });
+                        batch.update(rows[rowIndex][1].ref, { isFullWidth: true });
+                        actionTaken = true;
+                    }
+                } else if (subAction === 'up') {
+                    if (rows[rowIndex].length === 2 && colIndex === 0) {
+                        // Split action from top button
+                        batch.update(rows[rowIndex][0].ref, { isFullWidth: true });
+                        batch.update(rows[rowIndex][1].ref, { isFullWidth: true });
+                        actionTaken = true;
+                    } else if (rows[rowIndex].length === 1 && rowIndex > 0 && rows[rowIndex-1].length === 1) {
+                        // Merge action
+                        batch.update(rows[rowIndex][0].ref, { isFullWidth: false });
+                        batch.update(rows[rowIndex-1][0].ref, { isFullWidth: false });
+                        actionTaken = true;
+                    }
+                }
+
+                if (!actionTaken) { // Default sequential move
+                    if (subAction === 'up' && currentIndex > 0) {
+                        [buttonList[currentIndex], buttonList[currentIndex - 1]] = [buttonList[currentIndex - 1], buttonList[currentIndex]];
+                        actionTaken = true;
+                    } else if (subAction === 'down' && currentIndex < buttonList.length - 1) {
+                        [buttonList[currentIndex], buttonList[currentIndex + 1]] = [buttonList[currentIndex + 1], buttonList[currentIndex]];
+                        actionTaken = true;
+                    }
+                }
+
+                if (actionTaken) {
+                    buttonList.forEach((button, i) => batch.update(button.ref, { order: i }));
                     await batch.commit();
-                    await ctx.answerCbQuery('✅ تم تحديث الترتيب');
-                } else { 
-                    await ctx.answerCbQuery('لا يمكن التحريك'); 
+                    await ctx.answerCbQuery('✅ تم');
+                    // Auto-refresh after any move
+                    await ctx.deleteMessage().catch(()=>{});
+                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                } else {
+                    await ctx.answerCbQuery('لا يمكن التحريك');
                 }
                 return;
             }
-            if (subAction === 'refresh_keyboard') {
-                await ctx.answerCbQuery('🔄 جارٍ تحديث لوحة المفاتيح...');
-                await ctx.deleteMessage().catch(() => {});
-                await ctx.reply(
-                    '✅ تم تحديث لوحة المفاتيح.', 
-                    Markup.keyboard(await generateKeyboard(userId)).resize()
-                );
+            if (subAction === 'toggle_width') {
+                const buttonRef = db.collection('buttons').doc(targetId);
+                const buttonDoc = await buttonRef.get();
+                const isFullWidth = !buttonDoc.data().isFullWidth;
+                await buttonRef.update({ isFullWidth });
+                await ctx.answerCbQuery(isFullWidth ? '✅ تم تفعيل العرض الكامل' : '✅ تم إلغاء العرض الكامل');
+                // Auto-refresh
+                await ctx.deleteMessage().catch(()=>{});
+                await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
             }
+            // END: MODIFICATION - نهاية تعديل منطق التحريك الذكي
             if (subAction === 'adminonly') {
                 const buttonDoc = await db.collection('buttons').doc(targetId).get();
                 const adminOnly = !buttonDoc.data().adminOnly;
@@ -646,7 +699,6 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.answerCbQuery();
                 return ctx.replyWithHTML(statsMessage);
             }
-            // END: MODIFICATION - نهاية التعديل
         }
 
         if (action === 'msg') {
