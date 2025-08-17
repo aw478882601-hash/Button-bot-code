@@ -819,22 +819,53 @@ bot.on('callback_query', async (ctx) => {
     }
 });
 
-// ✅ دالة لتحديث الكيبورد بعد أي تعديل
-async function refreshKeyboard(ctx, userId, message = '📋 القائمة بعد التحديث:') {
+async function refreshKeyboard(ctx, userId, message = "📋 القائمة بعد التحديث:") {
     try {
-        await ctx.reply(message, Markup.keyboard(await generateKeyboard(userId)).resize());
-    } catch (e) {
-        console.error("Error in refreshKeyboard:", e.message);
+        const keyboard = Markup.keyboard(await generateKeyboard(userId)).resize();
+
+        // امسح الكيبورد القديم وابعت الجديد
+        await ctx.reply(message, keyboard);
+
+    } catch (err) {
+        console.error("refreshKeyboard error:", err);
     }
 }
 
-// ✅ دالة لتحديث الرسائل بعد أي تعديل
 async function refreshMessages(ctx, buttonId) {
     try {
-        await ctx.reply("🔄 جاري تحديث الرسائل...");
-        await sendButtonMessages(ctx, buttonId, true);
-    } catch (e) {
-        console.error("Error in refreshMessages:", e.message);
+        // هات الرسائل الجديدة من الداتا
+        const msgs = await db.collection('messages')
+            .where('buttonId', '==', buttonId)
+            .orderBy('order')
+            .get();
+
+        if (msgs.empty) {
+            return ctx.reply("📭 لا توجد رسائل مرتبطة بهذا الزر.");
+        }
+
+        // امسح القديم (لو حابب تضيف مسح تلقائي)
+        await ctx.reply("📩 الرسائل بعد التحديث:");
+
+        // ابعت كل الرسائل بالترتيب الجديد
+        for (const doc of msgs.docs) {
+            const data = doc.data();
+            if (data.type === 'text') {
+                await ctx.reply(data.content, { entities: data.entities || [] });
+            } else {
+                const options = { caption: data.caption || "", caption_entities: data.entities || [] };
+                if (data.type === 'photo') await ctx.replyWithPhoto(data.content, options);
+                if (data.type === 'video') await ctx.replyWithVideo(data.content, options);
+                if (data.type === 'document') await ctx.replyWithDocument(data.content, options);
+            }
+        }
+
+        // زراير التحكم في الرسائل
+        await ctx.reply("⚙️ إدارة الرسائل:", {
+            reply_markup: await generateMessagesInlineKeyboard(buttonId)
+        });
+
+    } catch (err) {
+        console.error("refreshMessages error:", err);
     }
 }
 
