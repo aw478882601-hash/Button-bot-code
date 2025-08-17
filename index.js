@@ -32,6 +32,23 @@ async function trackSentMessages(userId, messageIds) {
     await userRef.update({ 'stateData.messageViewIds': messageIds });
 }
 
+async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '✅ تم تحديث العرض.') {
+    // 1. حذف الرسائل القديمة المعروضة
+    const userDoc = await db.collection('users').doc(String(userId)).get();
+    const messageIdsToDelete = userDoc.data().stateData?.messageViewIds || [];
+
+    for (const msgId of messageIdsToDelete) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, msgId).catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`));
+    }
+    
+    // 2. إرسال الرسائل الجديدة مع أزرار التحكم
+    await sendButtonMessages(ctx, buttonId, true);
+    
+    // 3. إرسال رسالة تأكيد مع لوحة المفاتيح المحدثة
+    await ctx.reply(confirmationMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
+}
+
+
 async function generateKeyboard(userId) {
   try {
     const userDoc = await db.collection('users').doc(String(userId)).get();
@@ -268,9 +285,8 @@ const mainMessageHandler = async (ctx) => {
                 await db.collection("messages").doc(stateData.messageId).update({
                     type: "text", content: ctx.message.text, entities: ctx.message.entities || [], caption: ""
                 });
-                await ctx.reply("✅ تم تعديل النص");
-                await clearAndResendMessages(ctx, userId, stateData.buttonId);
                 await userRef.update({ stateData: {} });
+                await refreshAdminView(ctx, userId, stateData.buttonId, '✅ تم تعديل النص بنجاح.');
                 return;
             }
 
@@ -280,9 +296,8 @@ const mainMessageHandler = async (ctx) => {
                 await db.collection("messages").doc(stateData.messageId).update({
                     caption: ctx.message.text, entities: ctx.message.entities || []
                 });
-                await ctx.reply("✅ تم تعديل الشرح");
-                await clearAndResendMessages(ctx, userId, stateData.buttonId);
                 await userRef.update({ stateData: {} });
+                await refreshAdminView(ctx, userId, stateData.buttonId, '✅ تم تعديل الشرح بنجاح.');
                 return;
             }
 
@@ -300,9 +315,8 @@ const mainMessageHandler = async (ctx) => {
                 } else { return ctx.reply("⚠️ نوع الملف غير مدعوم"); }
 
                 await db.collection("messages").doc(stateData.messageId).update({ type, content: fileId, caption, entities });
-                await ctx.reply("✅ تم استبدال الرسالة");
-                await clearAndResendMessages(ctx, userId, stateData.buttonId);
                 await userRef.update({ stateData: {} });
+                await refreshAdminView(ctx, userId, stateData.buttonId, '✅ تم استبدال الرسالة بنجاح.');
                 return;
             }
             
@@ -330,9 +344,8 @@ const mainMessageHandler = async (ctx) => {
                     if (!lastMsg.empty) order = lastMsg.docs[0].data().order + 1;
                 }
                 await db.collection("messages").add({ buttonId, type, content: fileId, caption, entities, order });
-                await ctx.reply("✅ تم إضافة الرسالة");
-                await clearAndResendMessages(ctx, userId, buttonId);
                 await userRef.update({ stateData: {} });
+                await refreshAdminView(ctx, userId, buttonId, '✅ تم إضافة الرسالة بنجاح.');
                 return;
             }
         }
@@ -348,12 +361,6 @@ const mainMessageHandler = async (ctx) => {
 
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
 
-        // --- Handle User States (e.g., waiting for input) ---
-        // This is a simplified block. The original code had state logic here.
-        // For example, awaiting new button name, admin reply, etc.
-        // Ensure this logic is correctly placed or handled by the forced-reply system.
-
-        // --- CONTACTING_ADMIN state & similar states ---
         if (state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
             const adminsDoc = await db.collection('config').doc('admins').get();
             const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
@@ -378,15 +385,14 @@ const mainMessageHandler = async (ctx) => {
         if (!ctx.message || !ctx.message.text) return;
         const text = ctx.message.text;
 
-        // --- Handle Keyboard Button Presses ---
         switch (text) {
             case '🔝 القائمة الرئيسية':
-                await userRef.update({ currentPath: 'root', stateData: {} });
+                await userRef.update({ currentPath: 'root', state: 'NORMAL', stateData: {} });
                 return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
 
             case '🔙 رجوع':
                 const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
-                await userRef.update({ currentPath: newPath, stateData: {} });
+                await userRef.update({ currentPath: newPath, state: 'NORMAL', stateData: {} });
                 return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
 
             case '💬 التواصل مع الإدارة':
@@ -417,7 +423,7 @@ const mainMessageHandler = async (ctx) => {
                     await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
                     if (newContentState === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
                         const buttonId = currentPath.split('/').pop();
-                        await clearAndResendMessages(ctx, userId, buttonId);
+                        await clearAndResendMessages(ctx, userId, buttonId); // This is fine here, only shows messages without keyboard
                     }
                     return;
                 }
@@ -433,15 +439,13 @@ const mainMessageHandler = async (ctx) => {
             case '➕ إضافة رسالة':
                 if (isAdmin && state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
                     await userRef.update({
-                        state: 'AWAITING_NEW_MESSAGE',
                         stateData: { buttonId: currentPath.split('/').pop() }
                     });
-                    return ctx.reply('أرسل الرسالة الجديدة.', { reply_markup: { force_reply: true } });
+                    return ctx.reply('📝 أرسل الرسالة الجديدة:', { reply_markup: { force_reply: true } });
                 }
                 break;
         }
 
-        // --- Supervision Panel Logic ---
         if (currentPath === 'supervision' && isAdmin) {
             switch (text) {
                 case '📊 الإحصائيات':
@@ -487,7 +491,6 @@ const mainMessageHandler = async (ctx) => {
             }
         }
 
-        // --- Find and handle button press ---
         const buttonSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).limit(1).get();
         if (buttonSnapshot.empty) return;
 
@@ -686,7 +689,7 @@ bot.on('callback_query', async (ctx) => {
                 remainingMsgs.docs.forEach((doc, i) => batch.update(doc.ref, { order: i }));
                 await batch.commit();
                 await ctx.answerCbQuery('✅ تم الحذف');
-                await clearAndResendMessages(ctx, userId, buttonId);
+                await refreshAdminView(ctx, userId, buttonId, '🗑️ تم حذف الرسالة.');
                 return;
             }
 
@@ -706,7 +709,7 @@ bot.on('callback_query', async (ctx) => {
                     messageList.forEach((msg, i) => batch.update(msg.ref, { order: i }));
                     await batch.commit();
                     await ctx.answerCbQuery('✅ تم تحديث الترتيب');
-                    await clearAndResendMessages(ctx, userId, buttonId);
+                    await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
                 } else {
                     await ctx.answerCbQuery('لا يمكن التحريك');
                 }
