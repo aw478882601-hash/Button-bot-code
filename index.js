@@ -297,7 +297,10 @@ const mainMessageHandler = async (ctx) => {
                         case 'AWAITING_MSG_CAPTION':
                             let type, fileId, caption, entities;
                             if (ctx.message.text) {
-                                await db.collection('messages').doc(stateData.messageId).update({ caption: ctx.message.text, entities: ctx.message.entities || [] });
+                                type = 'text';
+                                fileId = ctx.message.text;  // استخدم النص كمحتوى إذا كان نصاً
+                                caption = '';
+                                entities = ctx.message.entities || [];
                             } else {
                                 caption = ctx.message.caption || '';
                                 entities = ctx.message.caption_entities || [];
@@ -305,17 +308,21 @@ const mainMessageHandler = async (ctx) => {
                                 else if (ctx.message.video) { type = 'video'; fileId = ctx.message.video.file_id; } 
                                 else if (ctx.message.document) { type = 'document'; fileId = ctx.message.document.file_id; }
                                 else { return ctx.reply('نوع الملف غير مدعوم.'); }
-                                await db.collection('messages').doc(stateData.messageId).update({ type, content: fileId, caption, entities });
                             }
-                            await userRef.update({ state: 'NORMAL', stateData: {} });
-                            await ctx.reply('✅ تم التعديل بنجاح.');
+                            await db.collection('messages').doc(stateData.messageId).update({ type, content: fileId, caption, entities });
+                            await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                            await ctx.telegram.sendChatAction(ctx.chat.id, 'typing');
+                            await clearAndResendMessages(ctx, userId, stateData.buttonId);
+                            await ctx.reply('✅ تم التعديل بنجاح. إليك الرسائل المحدثة:');
                             return;
                         
                         case 'AWAITING_TEXT_MESSAGE_EDIT':
                             if (!ctx.message.text) return ctx.reply('الرجاء إرسال نص فقط.');
                             await db.collection('messages').doc(stateData.messageId).update({ content: ctx.message.text, entities: ctx.message.entities || [] });
-                            await userRef.update({ state: 'NORMAL', stateData: {} });
-                            await ctx.reply('✅ تم تعديل الرسالة بنجاح.');
+                            await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                            await ctx.telegram.sendChatAction(ctx.chat.id, 'typing');
+                            await clearAndResendMessages(ctx, userId, stateData.buttonId);
+                            await ctx.reply('✅ تم تعديل الرسالة بنجاح. إليك الرسائل المحدثة:');
                             return;
 
                         case 'AWAITING_BROADCAST':
@@ -365,8 +372,10 @@ const mainMessageHandler = async (ctx) => {
                         else return;
                         await db.collection('messages').add({ buttonId, type, content: fileId, caption, entities: caption_entities, order: newMsgOrder });
                     }
-                    await userRef.update({ state: 'NORMAL', stateData: {} });
-                    await ctx.reply('✅ تمت إضافة الرسالة بنجاح.');
+                    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                    await ctx.telegram.sendChatAction(ctx.chat.id, 'typing');
+                    await clearAndResendMessages(ctx, userId, buttonId);
+                    await ctx.reply('✅ تمت إضافة الرسالة بنجاح. إليك الرسائل المحدثة:');
                     return;
                 }
             }
@@ -705,7 +714,11 @@ bot.on('callback_query', async (ctx) => {
                 const batch = db.batch();
                 remainingMsgs.docs.forEach((doc, i) => batch.update(doc.ref, { order: i }));
                 await batch.commit();
-                return ctx.answerCbQuery('✅ تم الحذف بنجاح');
+                await ctx.answerCbQuery('✅ تم الحذف بنجاح');
+                await ctx.telegram.sendChatAction(ctx.chat.id, 'typing');
+                await clearAndResendMessages(ctx, userId, buttonId);
+                await ctx.reply('✅ تم الحذف بنجاح. إليك الرسائل المحدثة:');
+                return;
             }
             
             if (subAction === 'up' || subAction === 'down') {
@@ -727,38 +740,42 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(msg.ref, { order: i });
                     });
                     await batch.commit();
-                    return ctx.answerCbQuery('✅ تم تحديث الترتيب');
+                    await ctx.answerCbQuery('✅ تم تحديث الترتيب');
+                    await ctx.telegram.sendChatAction(ctx.chat.id, 'typing');
+                    await clearAndResendMessages(ctx, userId, buttonId);
+                    await ctx.reply('✅ تم تحديث الترتيب. إليك الرسائل المحدثة:');
                 } else { 
                     return ctx.answerCbQuery('لا يمكن التحريك'); 
                 }
+                return;
             }
 
             if (subAction === 'edit') {
                 await userRef.update({ state: 'AWAITING_TEXT_MESSAGE_EDIT', stateData: { messageId: targetId, buttonId } });
                 await ctx.answerCbQuery();
-                await ctx.deleteMessage().catch(()=>{});
+                await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(e => console.error('Edit markup failed:', e));
                 return ctx.reply('📝 أرسل الآن النص الجديد للرسالة.');
             }
 
             if (subAction === 'edit_caption') {
                 await userRef.update({ state: 'AWAITING_MSG_CAPTION', stateData: { messageId: targetId, buttonId } });
                 await ctx.answerCbQuery();
-                await ctx.deleteMessage().catch(()=>{});
+                await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(e => console.error('Edit markup failed:', e));
                 return ctx.reply('📝 أرسل الشرح الجديد فقط.');
             }
 
             if (subAction === 'replace_file') {
                  await userRef.update({ state: 'AWAITING_MSG_CAPTION', stateData: { messageId: targetId, buttonId } });
                 await ctx.answerCbQuery();
-                await ctx.deleteMessage().catch(()=>{});
-                return ctx.reply('🔄 أرسل الملف الجديد (صورة، فيديو، أو مستند). يمكنك إضافة شرح معه.');
+                await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(e => console.error('Edit markup failed:', e));
+                return ctx.reply('🔄 أرسل الملف الجديد (صورة، فيديو، أو مستند) أو نصاً لاستبداله. يمكنك إضافة شرح معه.');
             }
             
             if (subAction === 'addnext') {
                 const msg = messageDoc.data();
                 await userRef.update({ state: 'AWAITING_NEW_MESSAGE_NEXT', stateData: { targetOrder: msg.order + 1, buttonId } });
                 await ctx.answerCbQuery();
-                await ctx.deleteMessage().catch(()=>{});
+                await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(e => console.error('Edit markup failed:', e));
                 return ctx.reply('أرسل الرسالة التالية:');
             }
         }
