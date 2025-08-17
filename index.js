@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V35 - ENHANCED UX CONFIRMATIONS   |
+// |   TELEGRAM FIREBASE BOT - V37 - FINAL COMPLETE BUILD        |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -30,8 +30,11 @@ async function generateKeyboard(userId) {
   try {
     const userDoc = await db.collection('users').doc(String(userId)).get();
     if (!userDoc.exists) return [[]];
+
     const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userDoc.data();
+    
     let keyboardRows = [];
+
     if (currentPath === 'supervision') {
         keyboardRows = [
             ['📊 الإحصائيات', '🗣️ رسالة جماعية'],
@@ -41,7 +44,9 @@ async function generateKeyboard(userId) {
         ];
         return keyboardRows;
     }
+
     const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
+
     let currentRow = [];
     buttonsSnapshot.forEach(doc => {
       const button = doc.data();
@@ -51,23 +56,32 @@ async function generateKeyboard(userId) {
       }
     });
     if (currentRow.length > 0) keyboardRows.push(currentRow);
+
     if (isAdmin) {
       const adminActionRow = [];
       if (state === 'EDITING_BUTTONS') adminActionRow.push('➕ إضافة زر');
       if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) adminActionRow.push('➕ إضافة رسالة');
       if (adminActionRow.length > 0) keyboardRows.push(adminActionRow);
     }
+    
     const fixedButtons = [];
-    if (currentPath !== 'root') fixedButtons.push('🔙 رجوع');
+    if (currentPath !== 'root') {
+      fixedButtons.push('🔙 رجوع');
+    }
     fixedButtons.push('🔝 القائمة الرئيسية');
-    if (isAdmin && currentPath === 'root') fixedButtons.push('👑 الإشراف');
+    
+    if (isAdmin && currentPath === 'root') {
+      fixedButtons.push('👑 الإشراف');
+    }
     if (fixedButtons.length > 0) keyboardRows.push(fixedButtons);
+    
     if (isAdmin) {
       const adminControlRow = [];
       adminControlRow.push(state === 'EDITING_BUTTONS' ? '🚫 إلغاء تعديل الأزرار' : '✏️ تعديل الأزرار');
       adminControlRow.push(state === 'EDITING_CONTENT' ? '🚫 إلغاء تعديل المحتوى' : '📄 تعديل المحتوى');
       keyboardRows.push(adminControlRow);
     }
+    
     keyboardRows.push(['💬 التواصل مع الإدارة']);
     return keyboardRows;
   } catch (error) {
@@ -78,9 +92,11 @@ async function generateKeyboard(userId) {
 
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     const messagesSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
+    
     if (messagesSnapshot.empty && inEditMode) {
         return 0;
     }
+
     for (const doc of messagesSnapshot.docs) {
         const message = doc.data();
         const messageId = doc.id;
@@ -184,7 +200,7 @@ bot.start(async (ctx) => {
                 }
             }
         } else {
-            await userRef.update({ currentPath: 'root', state: state === 'NORMAL' ? 'NORMAL' : state, stateData: {}, lastActive: today, isAdmin });
+            await userRef.update({ currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: today, isAdmin });
         }
         const settingsDoc = await db.collection('config').doc('settings').get();
         const welcomeMessage = (settingsDoc.exists && settingsDoc.data().welcomeMessage) ? settingsDoc.data().welcomeMessage : 'أهلاً بك في البوت!';
@@ -355,8 +371,6 @@ const mainMessageHandler = async (ctx) => {
                     const newContentState = state === 'EDITING_CONTENT' ? 'NORMAL' : 'EDITING_CONTENT';
                     await userRef.update({ state: newContentState });
                     await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-
-                    // إذا تم تفعيل وضع تعديل المحتوى، قم بعرض الرسائل فورًا
                     if (newContentState === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
                         const buttonId = currentPath.split('/').pop();
                         await sendButtonMessages(ctx, buttonId, true);
@@ -462,6 +476,7 @@ const mainMessageHandler = async (ctx) => {
 };
 
 bot.on('message', mainMessageHandler);
+
 bot.on('callback_query', async (ctx) => {
     try {
         const userId = String(ctx.from.id);
@@ -520,7 +535,6 @@ bot.on('callback_query', async (ctx) => {
                 await recursiveDeleteButton(buttonToDeletePath);
                 await ctx.answerCbQuery();
                 await ctx.deleteMessage().catch(() => {});
-                // **التعديل هنا: إرسال رسالة تأكيد مع القائمة المحدثة**
                 await ctx.reply('✅ تم الحذف بنجاح. القائمة تم تحديثها.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
             }
@@ -545,7 +559,6 @@ bot.on('callback_query', async (ctx) => {
                     await batch.commit();
                     await ctx.answerCbQuery();
                     await ctx.deleteMessage().catch(() => {});
-                    // **التعديل هنا: إرسال رسالة تأكيد مع القائمة المحدثة**
                     await ctx.reply('✅ تم تحديث الترتيب. القائمة تم تحديثها.', Markup.keyboard(await generateKeyboard(userId)).resize());
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
@@ -582,10 +595,8 @@ bot.on('callback_query', async (ctx) => {
                 const batch = db.batch();
                 remainingMsgs.docs.forEach((doc, i) => batch.update(doc.ref, { order: i }));
                 await batch.commit();
-                
                 await ctx.answerCbQuery();
                 await ctx.deleteMessage().catch(() => {});
-                // **التعديل هنا: إرسال القائمة المحدثة فقط (بدون رسالة تأكيد)**
                 await sendButtonMessages(ctx, buttonId, true);
                 return;
             }
@@ -618,10 +629,8 @@ bot.on('callback_query', async (ctx) => {
                         batch.update(msgRef, { order: i });
                     });
                     await batch.commit();
-                    
                     await ctx.answerCbQuery();
                     await ctx.deleteMessage().catch(() => {});
-                    // **التعديل هنا: إرسال القائمة المحدثة فقط (بدون رسالة تأكيد)**
                     await sendButtonMessages(ctx, buttonId, true);
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
