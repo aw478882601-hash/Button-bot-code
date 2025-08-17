@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V39 - REVISED STATE & ACTIONS       |
+// |   TELEGRAM FIREBASE BOT - V40 - UNIFIED ACTION CONFIRMATION   |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -245,6 +245,7 @@ const mainMessageHandler = async (ctx) => {
         if (ctx.message && ctx.message.reply_to_message) {
             const replyPrompt = ctx.message.reply_to_message.text || '';
             
+            // --- NEW: Handle Delete Confirmation ---
             if (stateData.action === 'confirm_delete') {
                 if (ctx.message.text === 'نعم') {
                     await db.collection('messages').doc(stateData.messageId).delete();
@@ -257,6 +258,36 @@ const mainMessageHandler = async (ctx) => {
                 } else {
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, stateData.buttonId, 'تم إلغاء عملية الحذف.');
+                }
+                return;
+            }
+
+            // --- NEW: Handle Reorder Confirmation ---
+            if (stateData.action === 'confirm_reorder') {
+                if (ctx.message.text === 'نعم') {
+                    const { buttonId, messageId, direction } = stateData;
+                    const messagesSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
+                    let messageList = messagesSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
+                    const currentIndex = messageList.findIndex(m => m.id === messageId);
+                    
+                    let targetIndex = -1;
+                    if (direction === 'up' && currentIndex > 0) targetIndex = currentIndex - 1;
+                    else if (direction === 'down' && currentIndex < messageList.length - 1) targetIndex = currentIndex + 1;
+
+                    if (targetIndex !== -1) {
+                        [messageList[currentIndex], messageList[targetIndex]] = [messageList[targetIndex], messageList[currentIndex]];
+                        const batch = db.batch();
+                        messageList.forEach((msg, i) => batch.update(msg.ref, { order: i }));
+                        await batch.commit();
+                        await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                        await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
+                    } else {
+                        await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                        await refreshAdminView(ctx, userId, buttonId, 'لم يتم تغيير الترتيب.');
+                    }
+                } else {
+                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                     await refreshAdminView(ctx, userId, stateData.buttonId, 'تم إلغاء تغيير الترتيب.');
                 }
                 return;
             }
@@ -641,31 +672,26 @@ bot.on('callback_query', async (ctx) => {
                     stateData: { action: 'confirm_delete', messageId: targetId, buttonId: buttonId } 
                 });
                 await ctx.answerCbQuery();
-                await ctx.deleteMessage().catch(e => console.error(e));
                 return ctx.reply('🗑️ هل أنت متأكد من حذف هذه الرسالة؟\nأرسل "نعم" للتأكيد.', { 
                     reply_markup: { force_reply: true } 
                 });
             }
 
             if (subAction === 'up' || subAction === 'down') {
-                const messagesSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
-                let messageList = messagesSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
-                const currentIndex = messageList.findIndex(m => m.id === targetId);
-                if (currentIndex === -1) return ctx.answerCbQuery('خطأ');
-                let targetIndex = -1;
-                if (subAction === 'up' && currentIndex > 0) targetIndex = currentIndex - 1;
-                else if (subAction === 'down' && currentIndex < messageList.length - 1) targetIndex = currentIndex + 1;
-                if (targetIndex !== -1) {
-                    [messageList[currentIndex], messageList[targetIndex]] = [messageList[targetIndex], messageList[currentIndex]];
-                    const batch = db.batch();
-                    messageList.forEach((msg, i) => batch.update(msg.ref, { order: i }));
-                    await batch.commit();
-                    await ctx.answerCbQuery('✅ تم تحديث الترتيب');
-                    await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
-                } else {
-                    await ctx.answerCbQuery('لا يمكن التحريك');
-                }
-                return;
+                await userRef.update({
+                    state: 'AWAITING_CONFIRMATION',
+                    stateData: {
+                        action: 'confirm_reorder',
+                        messageId: targetId,
+                        buttonId: buttonId,
+                        direction: subAction
+                    }
+                });
+                await ctx.answerCbQuery();
+                const directionText = subAction === 'up' ? 'للأعلى' : 'للاسفل';
+                return ctx.reply(`↕️ هل أنت متأكد من تحريك الرسالة ${directionText}؟\nأرسل "نعم" للتأكيد.`, {
+                    reply_markup: { force_reply: true }
+                });
             }
 
             if (subAction === 'edit') {
