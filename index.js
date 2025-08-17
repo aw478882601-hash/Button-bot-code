@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V41 - FIX BUTTON EDIT STATES        |
+// |   TELEGRAM FIREBASE BOT - V42 - SMART BUTTON REORDERING       |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -241,10 +241,6 @@ const mainMessageHandler = async (ctx) => {
         if (!userDoc.exists) return bot.start(ctx);
 
         let { currentPath, state, isAdmin, stateData, banned } = userDoc.data();
-        
-        if (ctx.message && ctx.message.reply_to_message) {
-            // ... force reply logic is now handled in the main state handler ...
-        }
         
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
@@ -623,38 +619,51 @@ bot.on('callback_query', async (ctx) => {
             }
         }
         if (action === 'btn') {
-            await userRef.update({ stateData: {} });
-            if (subAction === 'rename') {
-                await userRef.update({ state: 'AWAITING_RENAME', stateData: { buttonId: targetId } });
-                await ctx.answerCbQuery();
-                await ctx.editMessageText('أدخل الاسم الجديد:');
-                return;
-            }
-            if (subAction === 'delete') {
-                const buttonToDeletePath = `${currentPath}/${targetId}`;
-                await recursiveDeleteButton(buttonToDeletePath);
-                await ctx.answerCbQuery('✅ تم الحذف بنجاح');
-                await ctx.deleteMessage().catch(()=>{});
-                await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                return;
-            }
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
                 let buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
-                if (buttonList.length < 1) return ctx.answerCbQuery('لا يوجد ما يكفي من الأزرار للتحريك');
                 const currentIndex = buttonList.findIndex(b => b.id === targetId);
                 if (currentIndex === -1) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
-                const batch = db.batch();
                 let actionTaken = false;
-                if (['up', 'down'].includes(subAction)) {
-                    if (subAction === 'up' && currentIndex > 0) {
-                        [buttonList[currentIndex], buttonList[currentIndex - 1]] = [buttonList[currentIndex - 1], buttonList[currentIndex]];
-                        actionTaken = true;
-                    } else if (subAction === 'down' && currentIndex < buttonList.length - 1) {
-                        [buttonList[currentIndex], buttonList[currentIndex + 1]] = [buttonList[currentIndex + 1], buttonList[currentIndex]];
+                const batch = db.batch();
+                if (subAction === 'up' || subAction === 'down') {
+                    if (subAction === 'up' && currentIndex > 0 && buttonList[currentIndex].isFullWidth && buttonList[currentIndex - 1].isFullWidth) {
+                        batch.update(buttonList[currentIndex].ref, { isFullWidth: false });
+                        batch.update(buttonList[currentIndex - 1].ref, { isFullWidth: false });
                         actionTaken = true;
                     }
-                } else if (['left', 'right'].includes(subAction)) {
+                    else if (subAction === 'down' && !buttonList[currentIndex].isFullWidth) {
+                        const partnerIndex = (currentIndex % 2 === 0) ? currentIndex + 1 : currentIndex - 1;
+                        if (partnerIndex >= 0 && partnerIndex < buttonList.length && !buttonList[partnerIndex].isFullWidth) {
+                            batch.update(buttonList[currentIndex].ref, { isFullWidth: true });
+                            batch.update(buttonList[partnerIndex].ref, { isFullWidth: true });
+                            actionTaken = true;
+                        }
+                    }
+                    if (!actionTaken) {
+                        let rows = [];
+                        let currentRow = [];
+                        buttonList.forEach(btn => {
+                            currentRow.push(btn);
+                            if (btn.isFullWidth || currentRow.length === 2) {
+                                rows.push(currentRow);
+                                currentRow = [];
+                            }
+                        });
+                        if (currentRow.length > 0) rows.push(currentRow);
+                        const rowIndex = rows.findIndex(row => row.some(btn => btn.id === targetId));
+                        if (subAction === 'up' && rowIndex > 0) {
+                            [rows[rowIndex], rows[rowIndex - 1]] = [rows[rowIndex - 1], rows[rowIndex]];
+                            actionTaken = true;
+                        } else if (subAction === 'down' && rowIndex < rows.length - 1) {
+                            [rows[rowIndex], rows[rowIndex + 1]] = [rows[rowIndex + 1], rows[rowIndex]];
+                            actionTaken = true;
+                        }
+                        if (actionTaken) {
+                            buttonList = rows.flat();
+                        }
+                    }
+                } else if (subAction === 'left' || subAction === 'right') {
                     let swapIndex = -1;
                     if (subAction === 'right' && currentIndex % 2 === 0 && currentIndex + 1 < buttonList.length && !buttonList[currentIndex].isFullWidth && !buttonList[currentIndex + 1]?.isFullWidth) {
                         swapIndex = currentIndex + 1;
@@ -675,6 +684,21 @@ bot.on('callback_query', async (ctx) => {
                 } else {
                     await ctx.answerCbQuery('لا يمكن التحريك');
                 }
+                return;
+            }
+            await userRef.update({ stateData: {} });
+            if (subAction === 'rename') {
+                await userRef.update({ state: 'AWAITING_RENAME', stateData: { buttonId: targetId } });
+                await ctx.answerCbQuery();
+                await ctx.editMessageText('أدخل الاسم الجديد:');
+                return;
+            }
+            if (subAction === 'delete') {
+                const buttonToDeletePath = `${currentPath}/${targetId}`;
+                await recursiveDeleteButton(buttonToDeletePath);
+                await ctx.answerCbQuery('✅ تم الحذف بنجاح');
+                await ctx.deleteMessage().catch(()=>{});
+                await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
             }
             if (subAction === 'adminonly') {
