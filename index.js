@@ -597,7 +597,9 @@ bot.on('callback_query', async (ctx) => {
                 await batch.commit();
                 await ctx.answerCbQuery();
                 await ctx.deleteMessage().catch(() => {});
-                await sendButtonMessages(ctx, buttonId, true);
+                // START: MODIFICATION - بداية التعديل
+                await ctx.reply('✅ تم حذف الرسالة بنجاح.');
+                // END: MODIFICATION - نهاية التعديل
                 return;
             }
             if (subAction === 'edit') {
@@ -631,7 +633,9 @@ bot.on('callback_query', async (ctx) => {
                     await batch.commit();
                     await ctx.answerCbQuery();
                     await ctx.deleteMessage().catch(() => {});
-                    await sendButtonMessages(ctx, buttonId, true);
+                    // START: MODIFICATION - بداية التعديل
+                    await ctx.reply('✅ تم تحديث ترتيب الرسالة بنجاح.');
+                    // END: MODIFICATION - نهاية التعديل
                     return;
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
