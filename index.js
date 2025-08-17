@@ -600,7 +600,7 @@ bot.on("message", async (ctx) => {
             if (replyPrompt.includes("أرسل الرسالة")) {
                 const buttonId = stateData.buttonId;
                 if (!buttonId) return ctx.reply("⚠️ خطأ: buttonId غير موجود");
-
+          }
 bot.on('message', mainMessageHandler);
 bot.on('callback_query', async (ctx) => {
     try {
