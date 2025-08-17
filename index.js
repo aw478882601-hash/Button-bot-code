@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V32 - FINAL COMPLETE BUILD        |
+// |   TELEGRAM FIREBASE BOT - V33 - COMPLETE CONTROLS & REFRESH |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -397,10 +397,7 @@ const mainMessageHandler = async (ctx) => {
                     const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
                     const totalButtons = (await db.collection('buttons').get()).size;
                     const totalMessages = (await db.collection('messages').get()).size;
-                    const statsMessage = `📊 <b>إحصائيات البوت:</b>\n\n` +
-                                         `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` +
-                                         `🔘 الأزرار: <code>${totalButtons}</code>\n` +
-                                         `✉️ الرسائل: <code>${totalMessages}</code>`;
+                    const statsMessage = `📊 <b>إحصائيات البوت:</b>\n\n` + `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` + `🔘 الأزرار: <code>${totalButtons}</code>\n` + `✉️ الرسائل: <code>${totalMessages}</code>`;
                     return ctx.replyWithHTML(statsMessage);
                 case '🗣️ رسالة جماعية':
                     await userRef.update({ state: 'AWAITING_BROADCAST' });
@@ -409,10 +406,7 @@ const mainMessageHandler = async (ctx) => {
                     if (userId !== process.env.SUPER_ADMIN_ID) return ctx.reply('🚫 هذه الميزة للمشرف الرئيسي فقط.');
                     const adminsDoc = await db.collection('config').doc('admins').get();
                     const adminList = (adminsDoc.exists && adminsDoc.data().ids.length > 0) ? adminsDoc.data().ids.join('\n') : 'لا يوجد مشرفون حالياً.';
-                    return ctx.reply(`<b>المشرفون الحاليون:</b>\n${adminList}`, {
-                        parse_mode: 'HTML',
-                        ...Markup.inlineKeyboard([[Markup.button.callback('➕ إضافة مشرف', 'admin:add'), Markup.button.callback('➖ حذف مشرف', 'admin:remove')]])
-                    });
+                    return ctx.reply(`<b>المشرفون الحاليون:</b>\n${adminList}`, { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('➕ إضافة مشرف', 'admin:add'), Markup.button.callback('➖ حذف مشرف', 'admin:remove')]]) });
                 case '📝 تعديل رسالة الترحيب':
                     await userRef.update({ state: 'AWAITING_WELCOME_MESSAGE' });
                     return ctx.reply('أرسل رسالة الترحيب الجديدة:');
@@ -501,16 +495,38 @@ bot.on('callback_query', async (ctx) => {
 
         if (action === 'admin') {
             await ctx.answerCbQuery();
-            if (subAction === 'reply') { /* ... */ }
-            if (subAction === 'ban') { /* ... */ }
-            if (subAction === 'unban') { /* ... */ }
+            if (subAction === 'reply') {
+                await userRef.update({ state: 'AWAITING_ADMIN_REPLY', stateData: { targetUserId: targetId } });
+                return ctx.reply(`أرسل الآن ردك للمستخدم <code>${targetId}</code>:`, { parse_mode: 'HTML' });
+            }
+            if (subAction === 'ban') {
+                await db.collection('users').doc(targetId).update({ banned: true });
+                await ctx.editMessageText(`🚫 تم حظر المستخدم <code>${targetId}</code> بنجاح.`, { parse_mode: 'HTML' });
+                await bot.telegram.sendMessage(targetId, '🚫 لقد تم حظرك من استخدام هذا البوت.').catch(e => console.error(e.message));
+                return;
+            }
+            if (subAction === 'unban') {
+                await db.collection('users').doc(targetId).update({ banned: false });
+                await ctx.editMessageText(`✅ تم فك حظر المستخدم <code>${targetId}</code>.`, { parse_mode: 'HTML' });
+                return;
+            }
             if (userId !== process.env.SUPER_ADMIN_ID) return ctx.reply('🚫 للمشرف الرئيسي فقط.');
-            if (subAction === 'add') { /* ... */ }
-            if (subAction === 'remove') { /* ... */ }
+            if (subAction === 'add') {
+                await userRef.update({ state: 'AWAITING_ADMIN_ID_TO_ADD' });
+                return ctx.editMessageText('أرسل ID المشرف الجديد:');
+            }
+            if (subAction === 'remove') {
+                await userRef.update({ state: 'AWAITING_ADMIN_ID_TO_REMOVE' });
+                return ctx.editMessageText('أرسل ID المشرف للحذف:');
+            }
         }
 
         if (action === 'btn') {
-            if (subAction === 'rename') { /* ... */ }
+            if (subAction === 'rename') {
+                await userRef.update({ state: 'AWAITING_RENAME', stateData: { buttonId: targetId } });
+                await ctx.answerCbQuery();
+                return ctx.reply('أدخل الاسم الجديد:');
+            }
             if (subAction === 'delete') {
                 await ctx.answerCbQuery('⏳ جاري الحذف...');
                 const buttonToDeletePath = `${currentPath}/${targetId}`;
@@ -542,7 +558,25 @@ bot.on('callback_query', async (ctx) => {
                     return ctx.reply('✅ تم تحديث الترتيب. إليك القائمة الجديدة:', Markup.keyboard(await generateKeyboard(userId)).resize());
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
-            // ... (other btn actions)
+            if (subAction === 'adminonly') {
+                const buttonDoc = await db.collection('buttons').doc(targetId).get();
+                const adminOnly = !buttonDoc.data().adminOnly;
+                await db.collection('buttons').doc(targetId).update({ adminOnly });
+                return ctx.answerCbQuery(`الزر الآن ${adminOnly ? 'للمشرفين فقط' : 'للجميع'}`);
+            }
+            if (subAction === 'stats') {
+                const buttonDoc = await db.collection('buttons').doc(targetId).get();
+                if (!buttonDoc.exists) return ctx.answerCbQuery('الزر غير موجود.');
+                const stats = buttonDoc.data().stats || {};
+                const today = new Date().toISOString().split('T')[0];
+                const totalClicks = stats.totalClicks || 0;
+                const dailyClicks = stats.dailyClicks ? (stats.dailyClicks[today] || 0) : 0;
+                const totalUsers = stats.totalUsers ? stats.totalUsers.length : 0;
+                const dailyUsers = stats.dailyUsers && stats.dailyUsers[today] ? stats.dailyUsers[today].length : 0;
+                const statsMessage = `📊 <b>إحصائيات الزر:</b>\n\n` + `👆 <b>الضغطات:</b>\n` + `  - اليوم: <code>${dailyClicks}</code>\n` + `  - الكلي: <code>${totalClicks}</code>\n\n` + `👤 <b>المستخدمون:</b>\n` + `  - اليوم: <code>${dailyUsers}</code>\n` + `  - الكلي: <code>${totalUsers}</code>`;
+                await ctx.answerCbQuery();
+                return ctx.replyWithHTML(statsMessage);
+            }
         }
 
         if (action === 'msg') {
@@ -594,7 +628,12 @@ bot.on('callback_query', async (ctx) => {
                     return sendButtonMessages(ctx, buttonId, true);
                 } else { return ctx.answerCbQuery('لا يمكن التحريك'); }
             }
-            if (subAction === 'addnext') { /* ... */ }
+            if (subAction === 'addnext') {
+                const msg = messageDoc.data();
+                await userRef.update({ state: 'AWAITING_NEW_MESSAGE_NEXT', stateData: { targetOrder: msg.order + 1, buttonId } });
+                await ctx.answerCbQuery();
+                return ctx.reply('أرسل الرسالة التالية:');
+            }
         }
     } catch (error) {
         console.error("FATAL ERROR in callback_query handler:", error);
