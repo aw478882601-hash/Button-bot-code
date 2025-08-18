@@ -250,6 +250,28 @@ const mainMessageHandler = async (ctx) => {
         // --- Handle specific user states for receiving text/media input ---
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
             
+            // *** FIX 1 START: Added handler for admin replies ***
+            if (state === 'AWAITING_ADMIN_REPLY') {
+                const { targetUserId } = stateData;
+                if (!targetUserId) {
+                    await userRef.update({ state: 'NORMAL', stateData: {} });
+                    return ctx.reply('⚠️ حدث خطأ: لم يتم العثور على المستخدم المراد الرد عليه.');
+                }
+                try {
+                    await ctx.copyMessage(targetUserId);
+                    const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ الرد على المشرف', `user:reply`) ]] };
+                    await bot.telegram.sendMessage(targetUserId, '✉️ رسالة جديدة من الإدارة.', { reply_markup: replyMarkup });
+                    await ctx.reply('✅ تم إرسال ردك بنجاح.');
+                } catch (e) {
+                    console.error(`Failed to send admin reply to user ${targetUserId}:`, e.message);
+                    await ctx.reply(`❌ فشل إرسال الرسالة للمستخدم ${targetUserId}. قد يكون المستخدم قد حظر البوت.`);
+                } finally {
+                    await userRef.update({ state: 'NORMAL', stateData: {} });
+                }
+                return;
+            }
+            // *** FIX 1 END ***
+
             if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_REPLACEMENT_FILE' || state === 'AWAITING_EDITED_TEXT' || state === 'AWAITING_NEW_CAPTION') {
                 const { buttonId, messageId, targetOrder } = stateData;
                 if (!buttonId) {
@@ -600,8 +622,15 @@ const mainMessageHandler = async (ctx) => {
 
         const buttonSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', text).limit(1).get();
         if (buttonSnapshot.empty) return;
+        
         const buttonDoc = buttonSnapshot.docs[0];
+        const buttonData = buttonDoc.data();
         const buttonId = buttonDoc.id;
+
+        // *** FIX 2: Added check to prevent non-admins from accessing adminOnly buttons ***
+        if (buttonData.adminOnly && !isAdmin) {
+            return ctx.reply('🚫 عذراً، هذا القسم مخصص للمشرفين فقط.');
+        }
 
         if (state === 'EDITING_BUTTONS' && isAdmin) {
             if (stateData && stateData.lastClickedButtonId === buttonId) {
@@ -609,7 +638,6 @@ const mainMessageHandler = async (ctx) => {
                 return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
-                // *** CHANGE 2: Reverted button labels to arrows ***
                 const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
                 return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
@@ -709,10 +737,6 @@ bot.on('callback_query', async (ctx) => {
                 const batch = db.batch();
                 let actionTaken = false;
 
-                // =================================================================
-                // | START: REVISED BUTTON REORDERING LOGIC                       |
-                // =================================================================
-
                 if (subAction === 'up' || subAction === 'down') {
                     let rows = [];
                     let currentRow = [];
@@ -741,11 +765,10 @@ bot.on('callback_query', async (ctx) => {
                         if (targetIsFullWidth) {
                             if (targetRowIndex > 0) {
                                 const rowAbove = rows[targetRowIndex - 1];
-                                if (rowAbove.length === 1) { // دمج زرين فرديين
+                                if (rowAbove.length === 1) {
                                     const buttonAbove = rowAbove[0];
                                     batch.update(targetButton.ref, { isFullWidth: false });
                                     batch.update(buttonAbove.ref, { isFullWidth: false });
-                                    
                                     const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
                                     const aboveIdx = buttonList.findIndex(b => b.id === buttonAbove.id);
                                     if (targetIdx !== aboveIdx + 1) {
@@ -755,23 +778,21 @@ bot.on('callback_query', async (ctx) => {
                                     actionTaken = true;
                                 }
                             }
-                        } else { // الزر المستهدف ضمن صف مزدوج
+                        } else { 
                             const partner = targetRow.find(b => b.id !== targetButton.id);
                             if (targetRowIndex > 0) {
                                 const rowAbove = rows[targetRowIndex - 1];
-                                if (rowAbove.length === 1) { // الزر يصعد ليندمج مع زر فردي أعلاه
+                                if (rowAbove.length === 1) { 
                                     const buttonAbove = rowAbove[0];
                                     batch.update(buttonAbove.ref, { isFullWidth: false });
                                     batch.update(targetButton.ref, { isFullWidth: false });
                                     batch.update(partner.ref, { isFullWidth: true });
-
                                     const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
                                     const [moved] = buttonList.splice(targetIdx, 1);
                                     const newAboveIdx = buttonList.findIndex(b => b.id === buttonAbove.id);
                                     buttonList.splice(newAboveIdx + 1, 0, moved);
                                     actionTaken = true;
-
-                                } else { // الزر يصعد ليفصل الصف المزدوج
+                                } else { 
                                     batch.update(targetButton.ref, { isFullWidth: true });
                                     batch.update(partner.ref, { isFullWidth: true });
                                     const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
@@ -781,7 +802,7 @@ bot.on('callback_query', async (ctx) => {
                                     }
                                     actionTaken = true;
                                 }
-                            } else { // فصل الصف المزدوج وهو في الأعلى
+                            } else { 
                                 batch.update(targetButton.ref, { isFullWidth: true });
                                 batch.update(partner.ref, { isFullWidth: true });
                                 const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
@@ -798,11 +819,10 @@ bot.on('callback_query', async (ctx) => {
                         if (targetIsFullWidth) {
                             if (targetRowIndex < rows.length - 1) {
                                 const rowBelow = rows[targetRowIndex + 1];
-                                if (rowBelow.length === 1) { // دمج زرين فرديين
+                                if (rowBelow.length === 1) { 
                                     const buttonBelow = rowBelow[0];
                                     batch.update(targetButton.ref, { isFullWidth: false });
                                     batch.update(buttonBelow.ref, { isFullWidth: false });
-                                    
                                     const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
                                     const [moved] = buttonList.splice(targetIdx, 1);
                                     const newBelowIdx = buttonList.findIndex(b => b.id === buttonBelow.id);
@@ -810,9 +830,9 @@ bot.on('callback_query', async (ctx) => {
                                     actionTaken = true;
                                 }
                             }
-                        } else { // الزر المستهدف ضمن صف مزدوج
+                        } else { 
                             const partner = targetRow.find(b => b.id !== targetButton.id);
-                            if (targetRowIndex < rows.length - 1) { // فصل الصف المزدوج
+                            if (targetRowIndex < rows.length - 1) { 
                                 batch.update(targetButton.ref, { isFullWidth: true });
                                 batch.update(partner.ref, { isFullWidth: true });
                                 const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
@@ -821,7 +841,7 @@ bot.on('callback_query', async (ctx) => {
                                     [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
                                 }
                                 actionTaken = true;
-                            } else { // تبديل أماكن الأزرار في الصف الأخير
+                            } else { 
                                 const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
                                 const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
                                 [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
@@ -848,7 +868,6 @@ bot.on('callback_query', async (ctx) => {
                 if (actionTaken) {
                     buttonList.forEach((button, i) => batch.update(button.ref, { order: i }));
                     await batch.commit();
-                    // *** CHANGE 3: Reset consecutive click counter ***
                     await db.collection('users').doc(userId).update({ stateData: {} });
                     await ctx.answerCbQuery('✅ تم');
                     await ctx.deleteMessage().catch(()=>{});
