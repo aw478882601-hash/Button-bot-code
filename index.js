@@ -83,21 +83,31 @@ async function generateKeyboard(userId) {
       }
       if (adminActionRow.length > 0) keyboardRows.push(adminActionRow);
     }
-    const fixedButtons = [];
+    
+    // *** NEW: Re-structured fixed control buttons ***
+    // الصف الأول: القائمة الرئيسية والرجوع
     if (currentPath !== 'root') {
-      fixedButtons.push('🔙 رجوع');
-      fixedButtons.push('🔝 القائمة الرئيسية');
+        keyboardRows.push(['🔝 القائمة الرئيسية', '🔙 رجوع']);
     }
-    if (isAdmin && currentPath === 'root') fixedButtons.push('👑 الإشراف');
-    if (fixedButtons.length > 0) keyboardRows.push(fixedButtons);
+
+    // الصف الثاني: أزرار تعديل المحتوى والأزرار (للمشرف فقط)
     if (isAdmin) {
-      const adminControlRow = [];
-      adminControlRow.push(state === 'EDITING_BUTTONS' ? '🚫 إلغاء تعديل الأزرار' : '✏️ تعديل الأزرار');
-      adminControlRow.push(state === 'EDITING_CONTENT' ? '🚫 إلغاء تعديل المحتوى' : '📄 تعديل المحتوى');
-      keyboardRows.push(adminControlRow);
+        const editContentText = state === 'EDITING_CONTENT' ? '🚫 إلغاء تعديل المحتوى' : '📄 تعديل المحتوى';
+        const editButtonsText = state === 'EDITING_BUTTONS' ? '🚫 إلغاء تعديل الأزرار' : '✏️ تعديل الأزرار';
+        keyboardRows.push([editContentText, editButtonsText]);
     }
-    // *** TEXT CHANGE 1 ***
-    keyboardRows.push(['💬 التواصل مع الأدمن']);
+
+    // الصف الثالث: الإشراف والتواصل مع الأدمن
+    const finalRow = [];
+    // في اللغة العربية، العنصر الأول في المصفوفة يظهر يميناً
+    if (isAdmin && currentPath === 'root') {
+        finalRow.push('👑 الإشراف');
+    }
+    finalRow.push('💬 التواصل مع الأدمن');
+    
+    // إذا كان الصف يحتوي على زر واحد فقط، سيأخذ عرض الشاشة كاملاً
+    keyboardRows.push(finalRow);
+
     return keyboardRows;
   } catch (error) {
     console.error('Error generating keyboard:', error);
@@ -251,7 +261,6 @@ const mainMessageHandler = async (ctx) => {
         // --- Handle specific user states for receiving text/media input ---
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
             
-            // *** FIX: Added handler for admin replies ***
             if (state === 'AWAITING_ADMIN_REPLY') {
                 const { targetUserId } = stateData;
                 if (!targetUserId) {
@@ -261,7 +270,6 @@ const mainMessageHandler = async (ctx) => {
                 try {
                     await ctx.copyMessage(targetUserId);
                     const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ الرد على المشرف', `user:reply`) ]] };
-                    // *** TEXT CHANGE 2 ***
                     await bot.telegram.sendMessage(targetUserId, '✉️ رسالة جديدة من الأدمن.', { reply_markup: replyMarkup });
                     await ctx.reply('✅ تم إرسال ردك بنجاح.');
                 } catch (e) {
@@ -456,7 +464,6 @@ const mainMessageHandler = async (ctx) => {
                 } catch (e) { console.error(`Failed to send message to admin ${adminId}:`, e); }
             }
             await userRef.update({ state: 'NORMAL' });
-            // *** TEXT CHANGE 3 ***
             await ctx.reply('✅ تم إرسال رسالتك إلى الأدمن بنجاح.');
             return;
         }
@@ -519,7 +526,6 @@ const mainMessageHandler = async (ctx) => {
                 const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
                 await userRef.update({ currentPath: newPath, stateData: {} });
                 return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
-            // *** TEXT CHANGE 4 ***
             case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
                 return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)...');
@@ -630,7 +636,6 @@ const mainMessageHandler = async (ctx) => {
         const buttonData = buttonDoc.data();
         const buttonId = buttonDoc.id;
 
-        // *** FIX: Added check to prevent non-admins from accessing adminOnly buttons ***
         if (buttonData.adminOnly && !isAdmin) {
             return ctx.reply('🚫 عذراً، هذا القسم مخصص للمشرفين فقط.');
         }
@@ -734,7 +739,6 @@ bot.on('callback_query', async (ctx) => {
             }
         }
         if (action === 'btn') {
-            // This is the button reordering logic from the file you provided (index (7).js)
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
                 let buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
