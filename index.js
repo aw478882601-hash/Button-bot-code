@@ -567,13 +567,28 @@ const mainMessageHandler = async (ctx) => {
         const text = ctx.message.text;
 
         switch (text) {
-            case '🔝 القائمة الرئيسية':
-                await userRef.update({ currentPath: 'root', stateData: {} });
-                return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
-            case '🔙 رجوع':
-                const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
-                await userRef.update({ currentPath: newPath, stateData: {} });
-                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
+            // ... inside the switch (text) block of mainMessageHandler ...
+
+            case '🔝 القائمة الرئيسية':
+                // If in a move operation, preserve stateData, otherwise clear it.
+                if (state === 'AWAITING_DESTINATION_PATH') {
+                    await userRef.update({ currentPath: 'root' });
+                } else {
+                    await userRef.update({ currentPath: 'root', stateData: {} });
+                }
+                return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
+
+            case '🔙 رجوع':
+                const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
+                // If in a move operation, preserve stateData, otherwise clear it.
+                if (state === 'AWAITING_DESTINATION_PATH') {
+                    await userRef.update({ currentPath: newPath });
+                } else {
+                    await userRef.update({ currentPath: newPath, stateData: {} });
+                }
+                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
+
+// ... the rest of the switch statement ...
             case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
                 return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)...');
