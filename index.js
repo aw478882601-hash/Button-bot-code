@@ -84,22 +84,17 @@ async function generateKeyboard(userId) {
       if (adminActionRow.length > 0) keyboardRows.push(adminActionRow);
     }
     
-    // *** NEW: Re-structured and Flipped fixed control buttons ***
-    // الصف الأول: القائمة الرئيسية والرجوع
     if (currentPath !== 'root') {
         keyboardRows.push(['🔙 رجوع', '🔝 القائمة الرئيسية']);
     }
 
-    // الصف الثاني: أزرار تعديل المحتوى والأزرار (للمشرف فقط)
     if (isAdmin) {
         const editContentText = state === 'EDITING_CONTENT' ? '🚫 إلغاء تعديل المحتوى' : '📄 تعديل المحتوى';
         const editButtonsText = state === 'EDITING_BUTTONS' ? '🚫 إلغاء تعديل الأزرار' : '✏️ تعديل الأزرار';
         keyboardRows.push([editButtonsText, editContentText]);
     }
 
-    // الصف الثالث: الإشراف والتواصل مع الأدمن
     const finalRow = [];
-    // في اللغة العربية، العنصر الأول في المصفوفة يظهر يميناً، لذلك نعكس الترتيب المطلوب
     finalRow.push('💬 التواصل مع الأدمن');
     if (isAdmin && currentPath === 'root') {
         finalRow.push('👑 الإشراف');
@@ -194,11 +189,12 @@ async function updateButtonStats(buttonId, userId) {
     } catch (e) { console.error(`Button stats transaction failed for button ${buttonId}:`, e); }
 }
 
-async function recursiveDeleteButton(buttonPath) {
+// *** FIX 1: Modified recursiveDeleteButton to update stats counters ***
+async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, messages: 0 }) {
     const subButtons = await db.collection('buttons').where('parentId', '==', buttonPath).get();
     for (const sub of subButtons.docs) {
         const subPath = `${buttonPath}/${sub.id}`;
-        await recursiveDeleteButton(subPath);
+        await recursiveDeleteButton(subPath, statsUpdate);
     }
     const buttonId = buttonPath.split('/').pop();
     const messages = await db.collection('messages').where('buttonId', '==', buttonId).get();
@@ -206,6 +202,11 @@ async function recursiveDeleteButton(buttonPath) {
     messages.forEach(doc => batch.delete(doc.ref));
     batch.delete(db.collection('buttons').doc(buttonId));
     await batch.commit();
+
+    statsUpdate.buttons++;
+    statsUpdate.messages += messages.size;
+
+    return statsUpdate;
 }
 
 // =================================================================
@@ -345,6 +346,8 @@ const mainMessageHandler = async (ctx) => {
                         if (!lastMsg.empty) order = lastMsg.docs[0].data().order + 1;
                     }
                     await db.collection("messages").add({ buttonId, type, content, caption, entities, order });
+                    // *** FIX 1: Increment message counter ***
+                    await db.collection('config').doc('stats').set({ totalMessages: admin.firestore.FieldValue.increment(1) }, { merge: true });
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم إضافة الرسالة بنجاح.');
                 }
@@ -383,6 +386,8 @@ const mainMessageHandler = async (ctx) => {
                 const lastButton = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
                 const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
                 await db.collection('buttons').add({ text: newButtonName, parentId: currentPath, order: newOrder, adminOnly: false, isFullWidth: true });
+                // *** FIX 1: Increment button counter ***
+                await db.collection('config').doc('stats').set({ totalButtons: admin.firestore.FieldValue.increment(1) }, { merge: true });
                 await userRef.update({ state: 'EDITING_BUTTONS' });
                 await ctx.reply(`✅ تم إضافة الزر "${newButtonName}" بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
@@ -577,8 +582,9 @@ const mainMessageHandler = async (ctx) => {
                     const totalUsers = (await db.collection('users').get()).size;
                     const todayStr = new Date().toISOString().split('T')[0];
                     const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
-                    const totalButtons = (await db.collection('buttons').get()).size;
-                    const totalMessages = (await db.collection('messages').get()).size;
+                    // *** FIX 1: Fetch stats from the counter document ***
+                    const statsDoc = await db.collection('config').doc('stats').get();
+                    const { totalButtons = 0, totalMessages = 0 } = statsDoc.data() || {};
                     const statsMessage = `📊 <b>إحصائيات البوت:</b>\n\n` + `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` + `🔘 الأزرار: <code>${totalButtons}</code>\n` + `✉️ الرسائل: <code>${totalMessages}</code>`;
                     return ctx.replyWithHTML(statsMessage);
                 case '🗣️ رسالة جماعية':
@@ -738,141 +744,112 @@ bot.on('callback_query', async (ctx) => {
         }
         if (action === 'btn') {
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
+                // *** FIX 2: Complete rebuild of the reordering logic ***
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
-                let buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
-                const batch = db.batch();
-                let actionTaken = false;
-
-                if (subAction === 'up' || subAction === 'down') {
-                    let rows = [];
-                    let currentRow = [];
-                    buttonList.forEach(btn => {
-                        currentRow.push(btn);
-                        if (btn.isFullWidth || currentRow.length === 2) {
-                            rows.push(currentRow);
-                            currentRow = [];
-                        }
-                    });
-                    if (currentRow.length > 0) rows.push(currentRow);
-
-                    let targetRowIndex = -1;
-                    rows.forEach((row, i) => {
-                        if (row.some(b => b.id === targetId)) targetRowIndex = i;
-                    });
-
-                    if (targetRowIndex === -1) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
-                    
-                    const targetRow = rows[targetRowIndex];
-                    const targetButton = targetRow.find(b => b.id === targetId);
-
-                    if (subAction === 'up') {
-                        const targetIsFullWidth = targetRow.length === 1;
-
-                        if (targetIsFullWidth) {
-                            if (targetRowIndex > 0) {
-                                const rowAbove = rows[targetRowIndex - 1];
-                                if (rowAbove.length === 1) {
-                                    const buttonAbove = rowAbove[0];
-                                    batch.update(targetButton.ref, { isFullWidth: false });
-                                    batch.update(buttonAbove.ref, { isFullWidth: false });
-                                    const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
-                                    const aboveIdx = buttonList.findIndex(b => b.id === buttonAbove.id);
-                                    if (targetIdx !== aboveIdx + 1) {
-                                        const [moved] = buttonList.splice(targetIdx, 1);
-                                        buttonList.splice(aboveIdx + 1, 0, moved);
-                                    }
-                                    actionTaken = true;
-                                }
-                            }
-                        } else { 
-                            const partner = targetRow.find(b => b.id !== targetButton.id);
-                            if (targetRowIndex > 0) {
-                                const rowAbove = rows[targetRowIndex - 1];
-                                if (rowAbove.length === 1) { 
-                                    const buttonAbove = rowAbove[0];
-                                    batch.update(buttonAbove.ref, { isFullWidth: false });
-                                    batch.update(targetButton.ref, { isFullWidth: false });
-                                    batch.update(partner.ref, { isFullWidth: true });
-                                    const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
-                                    const [moved] = buttonList.splice(targetIdx, 1);
-                                    const newAboveIdx = buttonList.findIndex(b => b.id === buttonAbove.id);
-                                    buttonList.splice(newAboveIdx + 1, 0, moved);
-                                    actionTaken = true;
-                                } else { 
-                                    batch.update(targetButton.ref, { isFullWidth: true });
-                                    batch.update(partner.ref, { isFullWidth: true });
-                                    const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
-                                    const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
-                                    if (targetIdx > partnerIdx) {
-                                        [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
-                                    }
-                                    actionTaken = true;
-                                }
-                            } else {
-                                batch.update(targetButton.ref, { isFullWidth: true });
-                                batch.update(partner.ref, { isFullWidth: true });
-                                const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
-                                const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
-                                if (targetIdx > partnerIdx) {
-                                    [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
-                                }
-                                actionTaken = true;
-                            }
-                        }
-                    } else { // subAction === 'down'
-                        const targetIsFullWidth = targetRow.length === 1;
-
-                        if (targetIsFullWidth) {
-                            if (targetRowIndex < rows.length - 1) {
-                                const rowBelow = rows[targetRowIndex + 1];
-                                if (rowBelow.length === 1) { 
-                                    const buttonBelow = rowBelow[0];
-                                    batch.update(targetButton.ref, { isFullWidth: false });
-                                    batch.update(buttonBelow.ref, { isFullWidth: false });
-                                    const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
-                                    const [moved] = buttonList.splice(targetIdx, 1);
-                                    const newBelowIdx = buttonList.findIndex(b => b.id === buttonBelow.id);
-                                    buttonList.splice(newBelowIdx, 0, moved);
-                                    actionTaken = true;
-                                }
-                            }
-                        } else { 
-                            const partner = targetRow.find(b => b.id !== targetButton.id);
-                            if (targetRowIndex < rows.length - 1) { 
-                                batch.update(targetButton.ref, { isFullWidth: true });
-                                batch.update(partner.ref, { isFullWidth: true });
-                                const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
-                                const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
-                                if (targetIdx < partnerIdx) {
-                                    [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
-                                }
-                                actionTaken = true;
-                            } else { 
-                                const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
-                                const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
-                                [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
-                                actionTaken = true;
-                            }
-                        }
-                    }
-                }
+                const buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
                 
-                else if (subAction === 'left' || subAction === 'right') {
-                    const currentIndex = buttonList.findIndex(b => b.id === targetId);
-                    let swapIndex = -1;
-                    if (subAction === 'right' && currentIndex % 2 === 0 && currentIndex + 1 < buttonList.length && !buttonList[currentIndex].isFullWidth && !buttonList[currentIndex + 1]?.isFullWidth) {
-                        swapIndex = currentIndex + 1;
-                    } else if (subAction === 'left' && currentIndex % 2 === 1 && !buttonList[currentIndex].isFullWidth && !buttonList[currentIndex - 1]?.isFullWidth) {
-                        swapIndex = currentIndex - 1;
+                let rows = [];
+                let currentRow = [];
+                buttonList.forEach(btn => {
+                    currentRow.push(btn);
+                    if (btn.isFullWidth || currentRow.length === 2) {
+                        rows.push(currentRow);
+                        currentRow = [];
                     }
-                    if (swapIndex !== -1) {
-                        [buttonList[currentIndex], buttonList[swapIndex]] = [buttonList[swapIndex], buttonList[currentIndex]];
+                });
+                if (currentRow.length > 0) rows.push(currentRow);
+
+                let targetRowIndex = -1;
+                let targetColIndex = -1;
+                rows.find((row, rIndex) => {
+                    const cIndex = row.findIndex(b => b.id === targetId);
+                    if (cIndex !== -1) {
+                        targetRowIndex = rIndex;
+                        targetColIndex = cIndex;
+                        return true;
+                    }
+                    return false;
+                });
+
+                if (targetRowIndex === -1) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
+                
+                let actionTaken = false;
+                const targetButton = rows[targetRowIndex][targetColIndex];
+
+                if (subAction === 'up') {
+                    const isHalfWidth = rows[targetRowIndex].length > 1;
+                    if (targetRowIndex > 0) {
+                        const rowAbove = rows[targetRowIndex - 1];
+                        if (isHalfWidth && rowAbove.length === 1) {
+                            // الأولوية: زر مزدوج يصعد ليندمج مع زر فردي
+                            const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
+                            const buttonAbove = rowAbove[0];
+                            rows[targetRowIndex - 1] = [buttonAbove, targetButton];
+                            rows[targetRowIndex] = [partner];
+                            actionTaken = true;
+                        } else if (!isHalfWidth && rowAbove.length === 1) {
+                            // زر فردي يصعد ليندمج مع زر فردي
+                            const buttonAbove = rowAbove[0];
+                            rows[targetRowIndex - 1] = [buttonAbove, targetButton];
+                            rows.splice(targetRowIndex, 1);
+                            actionTaken = true;
+                        } else if (isHalfWidth) {
+                            // زر مزدوج يصعد ليفصل نفسه عن شريكه
+                            const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
+                            rows.splice(targetRowIndex, 1, [targetButton], [partner]);
+                            actionTaken = true;
+                        }
+                    } else if (isHalfWidth) {
+                        // فصل الصف العلوي المزدوج
+                        const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
+                        rows.splice(targetRowIndex, 1, [targetButton], [partner]);
+                        actionTaken = true;
+                    }
+                } else if (subAction === 'down') {
+                    const isHalfWidth = rows[targetRowIndex].length > 1;
+                    if (targetRowIndex < rows.length - 1) {
+                        const rowBelow = rows[targetRowIndex + 1];
+                        if (isHalfWidth && rowBelow.length === 1) {
+                            // الأولوية: زر مزدوج ينزل ليندمج مع زر فردي
+                            const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
+                            const buttonBelow = rowBelow[0];
+                            rows[targetRowIndex] = [partner];
+                            rows[targetRowIndex + 1] = [targetButton, buttonBelow];
+                            actionTaken = true;
+                        } else if (!isHalfWidth && rowBelow.length === 1) {
+                            // زر فردي ينزل ليندمج مع زر فردي
+                            const buttonBelow = rowBelow[0];
+                            rows.splice(targetRowIndex, 1);
+                            rows[targetRowIndex] = [targetButton, buttonBelow]; // The index of rowBelow shifts up
+                            actionTaken = true;
+                        } else if (isHalfWidth) {
+                            // زر مزدوج ينزل ليفصل نفسه عن شريكه
+                            const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
+                            rows.splice(targetRowIndex, 1, [partner], [targetButton]);
+                            actionTaken = true;
+                        }
+                    } else if (isHalfWidth) {
+                        // تبديل أزرار الصف السفلي المزدوج
+                        [rows[targetRowIndex][0], rows[targetRowIndex][1]] = [rows[targetRowIndex][1], rows[targetRowIndex][0]];
+                        actionTaken = true;
+                    }
+                } else if (subAction === 'left' || subAction === 'right') {
+                    if (rows[targetRowIndex].length > 1) {
+                        [rows[targetRowIndex][0], rows[targetRowIndex][1]] = [rows[targetRowIndex][1], rows[targetRowIndex][0]];
                         actionTaken = true;
                     }
                 }
 
                 if (actionTaken) {
-                    buttonList.forEach((button, i) => batch.update(button.ref, { order: i }));
+                    const newButtonList = rows.flat();
+                    const batch = db.batch();
+                    newButtonList.forEach((button, index) => {
+                        const newIsFullWidth = rows.find(r => r.includes(button)).length === 1;
+                        batch.update(button.ref, { 
+                            order: index,
+                            isFullWidth: newIsFullWidth
+                        });
+                    });
                     await batch.commit();
                     await db.collection('users').doc(userId).update({ stateData: {} });
                     await ctx.answerCbQuery('✅ تم');
@@ -893,7 +870,15 @@ bot.on('callback_query', async (ctx) => {
             }
             if (subAction === 'delete') {
                 const buttonToDeletePath = `${currentPath}/${targetId}`;
-                await recursiveDeleteButton(buttonToDeletePath);
+                const deletedCounts = await recursiveDeleteButton(buttonToDeletePath);
+                
+                if (deletedCounts.buttons > 0 || deletedCounts.messages > 0) {
+                    await db.collection('config').doc('stats').set({
+                        totalButtons: admin.firestore.FieldValue.increment(-deletedCounts.buttons),
+                        totalMessages: admin.firestore.FieldValue.increment(-deletedCounts.messages)
+                    }, { merge: true });
+                }
+                
                 await ctx.answerCbQuery('✅ تم الحذف بنجاح');
                 await ctx.deleteMessage().catch(()=>{});
                 await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
