@@ -609,7 +609,8 @@ const mainMessageHandler = async (ctx) => {
                 return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
-                const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼 لأعلى', `btn:up:${buttonId}`), Markup.button.callback('🔽 لأسفل', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
+                // *** CHANGE 2: Reverted button labels to arrows ***
+                const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
                 return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
         }
@@ -709,7 +710,7 @@ bot.on('callback_query', async (ctx) => {
                 let actionTaken = false;
 
                 // =================================================================
-                // | START: NEW BUTTON REORDERING LOGIC BASED ON USER EXAMPLES    |
+                // | START: REVISED BUTTON REORDERING LOGIC                       |
                 // =================================================================
 
                 if (subAction === 'up' || subAction === 'down') {
@@ -740,7 +741,7 @@ bot.on('callback_query', async (ctx) => {
                         if (targetIsFullWidth) {
                             if (targetRowIndex > 0) {
                                 const rowAbove = rows[targetRowIndex - 1];
-                                if (rowAbove.length === 1) { // Rule 1: Merge two full-width rows
+                                if (rowAbove.length === 1) { // دمج زرين فرديين
                                     const buttonAbove = rowAbove[0];
                                     batch.update(targetButton.ref, { isFullWidth: false });
                                     batch.update(buttonAbove.ref, { isFullWidth: false });
@@ -754,25 +755,23 @@ bot.on('callback_query', async (ctx) => {
                                     actionTaken = true;
                                 }
                             }
-                        } else { // Target is in a half-width row
+                        } else { // الزر المستهدف ضمن صف مزدوج
                             const partner = targetRow.find(b => b.id !== targetButton.id);
                             if (targetRowIndex > 0) {
                                 const rowAbove = rows[targetRowIndex - 1];
-                                if (rowAbove.length === 1) { // Rule 4: Half-width button moves up to merge with a full-width row
+                                if (rowAbove.length === 1) { // الزر يصعد ليندمج مع زر فردي أعلاه
                                     const buttonAbove = rowAbove[0];
                                     batch.update(buttonAbove.ref, { isFullWidth: false });
                                     batch.update(targetButton.ref, { isFullWidth: false });
                                     batch.update(partner.ref, { isFullWidth: true });
 
                                     const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
-                                    const aboveIdx = buttonList.findIndex(b => b.id === buttonAbove.id);
                                     const [moved] = buttonList.splice(targetIdx, 1);
-                                    // Adjust splice index if the moved element was before its destination
                                     const newAboveIdx = buttonList.findIndex(b => b.id === buttonAbove.id);
                                     buttonList.splice(newAboveIdx + 1, 0, moved);
                                     actionTaken = true;
 
-                                } else { // Rule 2: Split row when moving up towards another half-width row
+                                } else { // الزر يصعد ليفصل الصف المزدوج
                                     batch.update(targetButton.ref, { isFullWidth: true });
                                     batch.update(partner.ref, { isFullWidth: true });
                                     const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
@@ -782,7 +781,7 @@ bot.on('callback_query', async (ctx) => {
                                     }
                                     actionTaken = true;
                                 }
-                            } else { // Rule 2 (on top row): Split top row
+                            } else { // فصل الصف المزدوج وهو في الأعلى
                                 batch.update(targetButton.ref, { isFullWidth: true });
                                 batch.update(partner.ref, { isFullWidth: true });
                                 const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
@@ -799,24 +798,21 @@ bot.on('callback_query', async (ctx) => {
                         if (targetIsFullWidth) {
                             if (targetRowIndex < rows.length - 1) {
                                 const rowBelow = rows[targetRowIndex + 1];
-                                if (rowBelow.length === 1) { // Inverse Rule 1: Merge two full-width rows
+                                if (rowBelow.length === 1) { // دمج زرين فرديين
                                     const buttonBelow = rowBelow[0];
                                     batch.update(targetButton.ref, { isFullWidth: false });
                                     batch.update(buttonBelow.ref, { isFullWidth: false });
                                     
                                     const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
-                                    const belowIdx = buttonList.findIndex(b => b.id === buttonBelow.id);
-                                    if (targetIdx !== belowIdx - 1) {
-                                        const [moved] = buttonList.splice(targetIdx, 1);
-                                        const newBelowIdx = buttonList.findIndex(b => b.id === buttonBelow.id);
-                                        buttonList.splice(newBelowIdx, 0, moved);
-                                    }
+                                    const [moved] = buttonList.splice(targetIdx, 1);
+                                    const newBelowIdx = buttonList.findIndex(b => b.id === buttonBelow.id);
+                                    buttonList.splice(newBelowIdx, 0, moved);
                                     actionTaken = true;
                                 }
                             }
-                        } else { // Target is in a half-width row
+                        } else { // الزر المستهدف ضمن صف مزدوج
                             const partner = targetRow.find(b => b.id !== targetButton.id);
-                            if (targetRowIndex < rows.length - 1) { // Rule 5: Split row when moving down
+                            if (targetRowIndex < rows.length - 1) { // فصل الصف المزدوج
                                 batch.update(targetButton.ref, { isFullWidth: true });
                                 batch.update(partner.ref, { isFullWidth: true });
                                 const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
@@ -825,7 +821,7 @@ bot.on('callback_query', async (ctx) => {
                                     [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
                                 }
                                 actionTaken = true;
-                            } else { // Rule 3: No row below, so swap partners
+                            } else { // تبديل أماكن الأزرار في الصف الأخير
                                 const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
                                 const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
                                 [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
@@ -834,10 +830,6 @@ bot.on('callback_query', async (ctx) => {
                         }
                     }
                 }
-                
-                // =================================================================
-                // | END: NEW BUTTON REORDERING LOGIC                             |
-                // =================================================================
                 
                 else if (subAction === 'left' || subAction === 'right') {
                     const currentIndex = buttonList.findIndex(b => b.id === targetId);
@@ -856,6 +848,8 @@ bot.on('callback_query', async (ctx) => {
                 if (actionTaken) {
                     buttonList.forEach((button, i) => batch.update(button.ref, { order: i }));
                     await batch.commit();
+                    // *** CHANGE 3: Reset consecutive click counter ***
+                    await db.collection('users').doc(userId).update({ stateData: {} });
                     await ctx.answerCbQuery('✅ تم');
                     await ctx.deleteMessage().catch(()=>{});
                     await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
