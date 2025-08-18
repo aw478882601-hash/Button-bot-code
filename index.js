@@ -125,8 +125,10 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
         return 0;
     }
 
-    // إنشاء مهام الإرسال كلها مع بعض
-    const sendTasks = messagesSnapshot.docs.map(async (doc) => {
+    const sentMessageIds = [];
+
+    // هنا نخليها تسلسلية عشان الترتيب يبان مضبوط
+    for (const doc of messagesSnapshot.docs) {
         const message = doc.data();
         const messageId = doc.id;
         let inlineKeyboard = [];
@@ -157,20 +159,18 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
         };
 
         try {
+            let sentMessage;
             switch (message.type) {
-                case 'text': return (await ctx.reply(message.content, { ...options })).message_id;
-                case 'photo': return (await ctx.replyWithPhoto(message.content, options)).message_id;
-                case 'video': return (await ctx.replyWithVideo(message.content, options)).message_id;
-                case 'document': return (await ctx.replyWithDocument(message.content, options)).message_id;
+                case 'text': sentMessage = await ctx.reply(message.content, { ...options }); break;
+                case 'photo': sentMessage = await ctx.replyWithPhoto(message.content, options); break;
+                case 'video': sentMessage = await ctx.replyWithVideo(message.content, options); break;
+                case 'document': sentMessage = await ctx.replyWithDocument(message.content, options); break;
             }
+            if (sentMessage) sentMessageIds.push(sentMessage.message_id);
         } catch (e) {
             console.error(`Failed to send message ID ${messageId}:`, e.message);
-            return null;
         }
-    });
-
-    // تنفيذ المهام كلها متوازي
-    const sentMessageIds = (await Promise.all(sendTasks)).filter(Boolean);
+    }
 
     if (inEditMode && ctx.from) {
         await trackSentMessages(String(ctx.from.id), sentMessageIds);
@@ -179,21 +179,6 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     return messagesSnapshot.size;
 }
 
-async function clearAndResendMessages(ctx, userId, buttonId) {
-    const userDoc = await db.collection('users').doc(String(userId)).get();
-    const messageIdsToDelete = userDoc.data().stateData?.messageViewIds || [];
-
-    // حذف متوازي
-    await Promise.all(
-        messageIdsToDelete.map(msgId =>
-            ctx.telegram.deleteMessage(ctx.chat.id, msgId)
-              .catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`))
-        )
-    );
-
-    // إعادة الإرسال
-    await sendButtonMessages(ctx, buttonId, true);
-}
 
 
 
