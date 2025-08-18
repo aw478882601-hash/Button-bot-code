@@ -171,7 +171,7 @@ async function clearAndResendMessages(ctx, userId, buttonId) {
 }
 
 async function updateButtonStats(buttonId, userId) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
     const buttonRef = db.collection('buttons').doc(buttonId);
     try {
         await db.runTransaction(async (transaction) => {
@@ -259,7 +259,7 @@ async function moveBranch(sourceButtonId, newParentPath) {
 bot.start(async (ctx) => {
     try {
         const userId = String(ctx.from.id);
-        const today = new Date().toISOString().split('T')[0];
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
         const userRef = db.collection('users').doc(userId);
         const userDoc = await userRef.get();
         const adminsDoc = await db.collection('config').doc('admins').get();
@@ -296,9 +296,8 @@ const mainMessageHandler = async (ctx) => {
         if (!userDoc.exists) return bot.start(ctx);
 
         let { currentPath, state, isAdmin, stateData, banned } = userDoc.data();
-        
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
-        await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
+        await userRef.update({ lastActive: new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }) });
 
         // --- Handle specific user states for receiving text/media input ---
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
@@ -685,7 +684,7 @@ const mainMessageHandler = async (ctx) => {
              switch (text) {
                 case '📊 الإحصائيات': { // Using block scope for new variables
                     const totalUsers = (await db.collection('users').get()).size;
-                    const todayStr = new Date().toISOString().split('T')[0];
+                    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
                     const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
                     
                     const statsRef = db.collection('config').doc('stats');
@@ -1010,7 +1009,7 @@ bot.on('callback_query', async (ctx) => {
                 const buttonDoc = await db.collection('buttons').doc(targetId).get();
                 if (!buttonDoc.exists) return ctx.answerCbQuery('الزر غير موجود.');
                 const stats = buttonDoc.data().stats || {};
-                const today = new Date().toISOString().split('T')[0];
+                const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
                 const totalClicks = stats.totalClicks || 0;
                 const dailyClicks = stats.dailyClicks ? (stats.dailyClicks[today] || 0) : 0;
                 const totalUsers = stats.totalUsers ? stats.totalUsers.length : 0;
