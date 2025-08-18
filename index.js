@@ -609,7 +609,7 @@ const mainMessageHandler = async (ctx) => {
                 return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
-                const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
+                const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼 لأعلى', `btn:up:${buttonId}`), Markup.button.callback('🔽 لأسفل', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
                 return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
         }
@@ -709,11 +709,10 @@ bot.on('callback_query', async (ctx) => {
                 let actionTaken = false;
 
                 // =================================================================
-                // | START: MODIFIED BUTTON REORDERING LOGIC                      |
+                // | START: NEW BUTTON REORDERING LOGIC BASED ON USER EXAMPLES    |
                 // =================================================================
 
                 if (subAction === 'up' || subAction === 'down') {
-                    // 1. Reconstruct the rows structure from the flat list
                     let rows = [];
                     let currentRow = [];
                     buttonList.forEach(btn => {
@@ -725,88 +724,119 @@ bot.on('callback_query', async (ctx) => {
                     });
                     if (currentRow.length > 0) rows.push(currentRow);
 
-                    // 2. Find the target button, its row, and its indices
-                    let targetRowIndex = -1, targetColIndex = -1;
-                    for (let i = 0; i < rows.length; i++) {
-                        const colIdx = rows[i].findIndex(b => b.id === targetId);
-                        if (colIdx !== -1) {
-                            targetRowIndex = i;
-                            targetColIndex = colIdx;
-                            break;
-                        }
-                    }
+                    let targetRowIndex = -1;
+                    rows.forEach((row, i) => {
+                        if (row.some(b => b.id === targetId)) targetRowIndex = i;
+                    });
 
                     if (targetRowIndex === -1) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
                     
-                    const targetButton = rows[targetRowIndex][targetColIndex];
                     const targetRow = rows[targetRowIndex];
-                    
-                    // 3. Implement the new logic based on user scenarios
+                    const targetButton = targetRow.find(b => b.id === targetId);
+
                     if (subAction === 'up') {
-                        if (targetRow.length === 1) { // Button is full-width
+                        const targetIsFullWidth = targetRow.length === 1;
+
+                        if (targetIsFullWidth) {
                             if (targetRowIndex > 0) {
                                 const rowAbove = rows[targetRowIndex - 1];
-                                if (rowAbove.length === 1) { // Row above is also full-width, merge them
+                                if (rowAbove.length === 1) { // Rule 1: Merge two full-width rows
                                     const buttonAbove = rowAbove[0];
                                     batch.update(targetButton.ref, { isFullWidth: false });
                                     batch.update(buttonAbove.ref, { isFullWidth: false });
                                     
-                                    const targetButtonIndex = buttonList.findIndex(b => b.id === targetId);
-                                    const buttonAboveIndex = buttonList.findIndex(b => b.id === buttonAbove.id);
-                                    if (targetButtonIndex !== buttonAboveIndex + 1) {
-                                        const [movedButton] = buttonList.splice(targetButtonIndex, 1);
-                                        buttonList.splice(buttonAboveIndex + 1, 0, movedButton);
+                                    const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
+                                    const aboveIdx = buttonList.findIndex(b => b.id === buttonAbove.id);
+                                    if (targetIdx !== aboveIdx + 1) {
+                                        const [moved] = buttonList.splice(targetIdx, 1);
+                                        buttonList.splice(aboveIdx + 1, 0, moved);
                                     }
                                     actionTaken = true;
                                 }
                             }
-                        } else { // Button is half-width, split the row
-                            const partner = targetRow[targetColIndex === 0 ? 1 : 0];
-                            batch.update(targetButton.ref, { isFullWidth: true });
-                            batch.update(partner.ref, { isFullWidth: true });
-                            
-                            const targetButtonIndex = buttonList.findIndex(b => b.id === targetId);
-                            const partnerIndex = buttonList.findIndex(b => b.id === partner.id);
-                            if (targetButtonIndex > partnerIndex) { // Ensure target is ordered before partner
-                                [buttonList[targetButtonIndex], buttonList[partnerIndex]] = [buttonList[partnerIndex], buttonList[targetButtonIndex]];
+                        } else { // Target is in a half-width row
+                            const partner = targetRow.find(b => b.id !== targetButton.id);
+                            if (targetRowIndex > 0) {
+                                const rowAbove = rows[targetRowIndex - 1];
+                                if (rowAbove.length === 1) { // Rule 4: Half-width button moves up to merge with a full-width row
+                                    const buttonAbove = rowAbove[0];
+                                    batch.update(buttonAbove.ref, { isFullWidth: false });
+                                    batch.update(targetButton.ref, { isFullWidth: false });
+                                    batch.update(partner.ref, { isFullWidth: true });
+
+                                    const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
+                                    const aboveIdx = buttonList.findIndex(b => b.id === buttonAbove.id);
+                                    const [moved] = buttonList.splice(targetIdx, 1);
+                                    // Adjust splice index if the moved element was before its destination
+                                    const newAboveIdx = buttonList.findIndex(b => b.id === buttonAbove.id);
+                                    buttonList.splice(newAboveIdx + 1, 0, moved);
+                                    actionTaken = true;
+
+                                } else { // Rule 2: Split row when moving up towards another half-width row
+                                    batch.update(targetButton.ref, { isFullWidth: true });
+                                    batch.update(partner.ref, { isFullWidth: true });
+                                    const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
+                                    const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
+                                    if (targetIdx > partnerIdx) {
+                                        [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
+                                    }
+                                    actionTaken = true;
+                                }
+                            } else { // Rule 2 (on top row): Split top row
+                                batch.update(targetButton.ref, { isFullWidth: true });
+                                batch.update(partner.ref, { isFullWidth: true });
+                                const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
+                                const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
+                                if (targetIdx > partnerIdx) {
+                                    [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
+                                }
+                                actionTaken = true;
                             }
-                            actionTaken = true;
                         }
                     } else { // subAction === 'down'
-                        if (targetRow.length === 1) { // Button is full-width
+                        const targetIsFullWidth = targetRow.length === 1;
+
+                        if (targetIsFullWidth) {
                             if (targetRowIndex < rows.length - 1) {
                                 const rowBelow = rows[targetRowIndex + 1];
-                                if (rowBelow.length === 1) { // Row below is also full-width, merge them
+                                if (rowBelow.length === 1) { // Inverse Rule 1: Merge two full-width rows
                                     const buttonBelow = rowBelow[0];
                                     batch.update(targetButton.ref, { isFullWidth: false });
                                     batch.update(buttonBelow.ref, { isFullWidth: false });
-
-                                    const targetButtonIndex = buttonList.findIndex(b => b.id === targetId);
-                                    const buttonBelowIndex = buttonList.findIndex(b => b.id === buttonBelow.id);
-                                    if (targetButtonIndex !== buttonBelowIndex - 1) {
-                                        const [movedButton] = buttonList.splice(targetButtonIndex, 1);
-                                        buttonList.splice(buttonBelowIndex, 0, movedButton);
+                                    
+                                    const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
+                                    const belowIdx = buttonList.findIndex(b => b.id === buttonBelow.id);
+                                    if (targetIdx !== belowIdx - 1) {
+                                        const [moved] = buttonList.splice(targetIdx, 1);
+                                        const newBelowIdx = buttonList.findIndex(b => b.id === buttonBelow.id);
+                                        buttonList.splice(newBelowIdx, 0, moved);
                                     }
                                     actionTaken = true;
                                 }
                             }
-                        } else { // Button is half-width, split the row
-                            const partner = targetRow[targetColIndex === 0 ? 1 : 0];
-                            batch.update(targetButton.ref, { isFullWidth: true });
-                            batch.update(partner.ref, { isFullWidth: true });
-
-                            const targetButtonIndex = buttonList.findIndex(b => b.id === targetId);
-                            const partnerIndex = buttonList.findIndex(b => b.id === partner.id);
-                            if (targetButtonIndex < partnerIndex) { // Ensure target is ordered after partner
-                                [buttonList[targetButtonIndex], buttonList[partnerIndex]] = [buttonList[partnerIndex], buttonList[targetButtonIndex]];
+                        } else { // Target is in a half-width row
+                            const partner = targetRow.find(b => b.id !== targetButton.id);
+                            if (targetRowIndex < rows.length - 1) { // Rule 5: Split row when moving down
+                                batch.update(targetButton.ref, { isFullWidth: true });
+                                batch.update(partner.ref, { isFullWidth: true });
+                                const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
+                                const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
+                                if (targetIdx < partnerIdx) {
+                                    [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
+                                }
+                                actionTaken = true;
+                            } else { // Rule 3: No row below, so swap partners
+                                const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
+                                const partnerIdx = buttonList.findIndex(b => b.id === partner.id);
+                                [buttonList[targetIdx], buttonList[partnerIdx]] = [buttonList[partnerIdx], buttonList[targetIdx]];
+                                actionTaken = true;
                             }
-                            actionTaken = true;
                         }
                     }
-                } 
+                }
                 
                 // =================================================================
-                // | END: MODIFIED BUTTON REORDERING LOGIC                        |
+                // | END: NEW BUTTON REORDERING LOGIC                             |
                 // =================================================================
                 
                 else if (subAction === 'left' || subAction === 'right') {
