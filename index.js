@@ -47,6 +47,8 @@ async function generateKeyboard(userId) {
     if (!userDoc.exists) return [[]];
     const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userDoc.data();
     let keyboardRows = [];
+   if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
+        keyboardRows.unshift(['✅ النقل إلى هنا', '❌ إلغاء النقل']);
     if (currentPath === 'supervision') {
         keyboardRows = [
             ['📊 الإحصائيات', '🗣️ رسالة جماعية'],
@@ -77,7 +79,7 @@ async function generateKeyboard(userId) {
     if (currentRow.length > 0) keyboardRows.push(currentRow);
     if (isAdmin) {
       const adminActionRow = [];
-      if (state === 'EDITING_BUTTONS') adminActionRow.push('➕ إضافة زر');
+      if (state === 'EDITING_BUTTONS') adminActionRow.push('➕ إضافة زر');   adminActionRow.push('✂️ نقل زر');
       if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
         adminActionRow.push('➕ إضافة رسالة');
       }
@@ -206,6 +208,41 @@ async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, mes
     statsUpdate.messages += messages.size;
 
     return statsUpdate;
+}
+async function moveBranch(sourceButtonId, newParentPath) {
+    const sourceButtonRef = db.collection('buttons').doc(sourceButtonId);
+    const sourceButtonDoc = await sourceButtonRef.get();
+    if (!sourceButtonDoc.exists) throw new Error("Source button not found.");
+
+    const sourceData = sourceButtonDoc.data();
+    const oldPath = `${sourceData.parentId}/${sourceButtonId}`;
+    const newPath = `${newParentPath}/${sourceButtonId}`;
+
+    // حساب الترتيب الجديد للزر المنقول ليكون آخر زر في وجهته
+    const siblingsSnapshot = await db.collection('buttons').where('parentId', '==', newParentPath).orderBy('order', 'desc').limit(1).get();
+    const newOrder = siblingsSnapshot.empty ? 0 : siblingsSnapshot.docs[0].data().order + 1;
+
+    const batch = db.batch();
+    
+    // 1. تحديث الزر الرئيسي وتغيير مساره وترتيبه
+    batch.update(sourceButtonRef, { parentId: newParentPath, order: newOrder });
+
+    // 2. دالة متتابعة للبحث عن كل الفروع وتحديث مسارها
+    async function findAndMoveDescendants(currentOldPath, currentNewPath) {
+        const snapshot = await db.collection('buttons').where('parentId', '==', currentOldPath).get();
+        if (snapshot.empty) return;
+
+        for (const doc of snapshot.docs) {
+            batch.update(doc.ref, { parentId: currentNewPath });
+            await findAndMoveDescendants(`${currentOldPath}/${doc.id}`, `${currentNewPath}/${doc.id}`);
+        }
+    }
+
+    // 3. بدء عملية تحديث الفروع
+    await findAndMoveDescendants(oldPath, newPath);
+    
+    // 4. تنفيذ جميع التحديثات دفعة واحدة
+    await batch.commit();
 }
 
 // =================================================================
@@ -576,6 +613,85 @@ const mainMessageHandler = async (ctx) => {
                 }
                 break;
         }
+     case '✂️ نقل زر':
+
+                if (isAdmin && state === 'EDITING_BUTTONS') {
+
+                    await userRef.update({ state: 'AWAITING_SOURCE_BUTTON_TO_MOVE' });
+
+                    return ctx.reply('✂️ الخطوة 1: اختر الزر الذي تريد نقله (المصدر).');
+
+                }
+
+                break;
+
+            case '✅ النقل إلى هنا':
+
+                if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
+
+                    const { sourceButtonId, sourceButtonText } = stateData;
+
+                    const newParentPath = currentPath;
+
+
+
+                    try {
+
+                        const sourceButtonDoc = await db.collection('buttons').doc(sourceButtonId).get();
+
+                        const oldPath = `${sourceButtonDoc.data().parentId}/${sourceButtonId}`;
+
+                        
+
+                        // منع نقل الزر إلى داخل نفسه أو فروعه
+
+                        if (newParentPath.startsWith(oldPath)) {
+
+                             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+
+                             return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى داخل نفسه أو أحد فروعه. تم إلغاء العملية.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+
+                        }
+
+
+
+                        await ctx.reply(`⏳ جاري نقل الزر [${sourceButtonText}] إلى القسم الحالي...`);
+
+                        await moveBranch(sourceButtonId, newParentPath);
+
+                        await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+
+                        return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+
+
+
+                    } catch (error) {
+
+                        console.error("Move button error:", error.message);
+
+                        await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+
+                        return ctx.reply(`❌ حدث خطأ أثناء نقل الزر.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+
+                    }
+
+                }
+
+                break;
+
+            case '❌ إلغاء النقل':
+
+                if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
+
+                    await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+
+                    return ctx.reply('👍 تم إلغاء عملية النقل.', Markup.keyboard(await generateKeyboard(userId)).resize());
+
+                }
+
+                break;
+
+        }
 
         if (currentPath === 'supervision' && isAdmin) {
              switch (text) {
@@ -660,7 +776,13 @@ const mainMessageHandler = async (ctx) => {
         const buttonDoc = buttonSnapshot.docs[0];
         const buttonData = buttonDoc.data();
         const buttonId = buttonDoc.id;
-
+if (isAdmin && state === 'AWAITING_SOURCE_BUTTON_TO_MOVE') {
+            await userRef.update({
+                state: 'AWAITING_DESTINATION_PATH',
+                stateData: { sourceButtonId: buttonId, sourceButtonText: buttonData.text }
+            });
+            return ctx.reply(`✅ تم اختيار [${buttonData.text}].\n\n🚙 الآن، تنقّل بحرية داخل البوت وعندما تصل للمكان المطلوب اضغط على زر "✅ النقل إلى هنا".`, Markup.keyboard(await generateKeyboard(userId)).resize());
+        }
         if (buttonData.adminOnly && !isAdmin) {
             return ctx.reply('🚫 عذراً، هذا القسم مخصص للمشرفين فقط.');
         }
