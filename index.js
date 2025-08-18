@@ -179,6 +179,21 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     return messagesSnapshot.size;
 }
 
+async function clearAndResendMessages(ctx, userId, buttonId) {
+    const userDoc = await db.collection('users').doc(String(userId)).get();
+    const messageIdsToDelete = userDoc.data().stateData?.messageViewIds || [];
+
+    // حذف متوازي
+    await Promise.all(
+        messageIdsToDelete.map(msgId =>
+            ctx.telegram.deleteMessage(ctx.chat.id, msgId)
+              .catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`))
+        )
+    );
+
+    // إعادة إرسال الرسائل
+    await sendButtonMessages(ctx, buttonId, true);
+}
 
 
 
