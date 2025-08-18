@@ -30,16 +30,26 @@ async function trackSentMessages(userId, messageIds) {
     const userRef = db.collection('users').doc(String(userId));
     await userRef.update({ 'stateData.messageViewIds': messageIds });
 }
-
 async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '✅ تم تحديث العرض.') {
     const userDoc = await db.collection('users').doc(String(userId)).get();
     const messageIdsToDelete = userDoc.data().stateData?.messageViewIds || [];
-    for (const msgId of messageIdsToDelete) {
-        await ctx.telegram.deleteMessage(ctx.chat.id, msgId).catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`));
-    }
+
+    // حذف متوازي
+    await Promise.all(
+        messageIdsToDelete.map(msgId =>
+            ctx.telegram.deleteMessage(ctx.chat.id, msgId)
+              .catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`))
+        )
+    );
+
+    // إعادة الإرسال
     await sendButtonMessages(ctx, buttonId, true);
+
+    // تحديث الكيبورد
     await ctx.reply(confirmationMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
 }
+
+
 
 async function generateKeyboard(userId) {
   try {
@@ -105,61 +115,87 @@ async function generateKeyboard(userId) {
 }
 
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
-    const messagesSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
-    const sentMessageIds = [];
+    const messagesSnapshot = await db.collection('messages')
+        .where('buttonId', '==', buttonId)
+        .orderBy('order')
+        .get();
+
     if (messagesSnapshot.empty && inEditMode) {
-        if(ctx.from) await trackSentMessages(String(ctx.from.id), []);
+        if (ctx.from) await trackSentMessages(String(ctx.from.id), []);
         return 0;
     }
-    for (const doc of messagesSnapshot.docs) {
+
+    // إنشاء مهام الإرسال كلها مع بعض
+    const sendTasks = messagesSnapshot.docs.map(async (doc) => {
         const message = doc.data();
         const messageId = doc.id;
-        let sentMessage;
         let inlineKeyboard = [];
+
         if (inEditMode) {
             const baseControls = [
-                Markup.button.callback('🔼', `msg:up:${messageId}`), Markup.button.callback('🔽', `msg:down:${messageId}`),
-                Markup.button.callback('🗑️', `msg:delete:${messageId}`), Markup.button.callback('➕', `msg:addnext:${messageId}`)
+                Markup.button.callback('🔼', `msg:up:${messageId}`),
+                Markup.button.callback('🔽', `msg:down:${messageId}`),
+                Markup.button.callback('🗑️', `msg:delete:${messageId}`),
+                Markup.button.callback('➕', `msg:addnext:${messageId}`)
             ];
             if (message.type === 'text') {
                 baseControls.push(Markup.button.callback('✏️', `msg:edit:${messageId}`));
-                inlineKeyboard = [ baseControls ];
+                inlineKeyboard = [baseControls];
             } else {
-                 inlineKeyboard = [ baseControls, [
+                inlineKeyboard = [baseControls, [
                     Markup.button.callback('📝 تعديل الشرح', `msg:edit_caption:${messageId}`),
                     Markup.button.callback('🔄 استبدال الملف', `msg:replace_file:${messageId}`)
                 ]];
             }
         }
-        const options = { 
-            caption: message.caption || '', entities: message.entities,
+
+        const options = {
+            caption: message.caption || '',
+            entities: message.entities,
             parse_mode: (message.entities && message.entities.length > 0) ? undefined : 'HTML',
             reply_markup: inEditMode && inlineKeyboard.length > 0 ? { inline_keyboard: inlineKeyboard } : undefined
         };
+
         try {
             switch (message.type) {
-                case 'text': sentMessage = await ctx.reply(message.content, { ...options }); break;
-                case 'photo': sentMessage = await ctx.replyWithPhoto(message.content, options); break;
-                case 'video': sentMessage = await ctx.replyWithVideo(message.content, options); break;
-                case 'document': sentMessage = await ctx.replyWithDocument(message.content, options); break;
+                case 'text': return (await ctx.reply(message.content, { ...options })).message_id;
+                case 'photo': return (await ctx.replyWithPhoto(message.content, options)).message_id;
+                case 'video': return (await ctx.replyWithVideo(message.content, options)).message_id;
+                case 'document': return (await ctx.replyWithDocument(message.content, options)).message_id;
             }
-            if (sentMessage) sentMessageIds.push(sentMessage.message_id);
         } catch (e) {
-            console.error(`Failed to send message ID ${messageId} (type: ${message.type}) due to error:`, e.message);
+            console.error(`Failed to send message ID ${messageId}:`, e.message);
+            return null;
         }
+    });
+
+    // تنفيذ المهام كلها متوازي
+    const sentMessageIds = (await Promise.all(sendTasks)).filter(Boolean);
+
+    if (inEditMode && ctx.from) {
+        await trackSentMessages(String(ctx.from.id), sentMessageIds);
     }
-    if(inEditMode && ctx.from) await trackSentMessages(String(ctx.from.id), sentMessageIds);
+
     return messagesSnapshot.size;
 }
 
 async function clearAndResendMessages(ctx, userId, buttonId) {
     const userDoc = await db.collection('users').doc(String(userId)).get();
     const messageIdsToDelete = userDoc.data().stateData?.messageViewIds || [];
-    for (const msgId of messageIdsToDelete) {
-        await ctx.telegram.deleteMessage(ctx.chat.id, msgId).catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`));
-    }
+
+    // حذف متوازي
+    await Promise.all(
+        messageIdsToDelete.map(msgId =>
+            ctx.telegram.deleteMessage(ctx.chat.id, msgId)
+              .catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`))
+        )
+    );
+
+    // إعادة الإرسال
     await sendButtonMessages(ctx, buttonId, true);
 }
+
+
 
 async function updateButtonStats(buttonId, userId) {
     const today = new Date().toISOString().split('T')[0];
