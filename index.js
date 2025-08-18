@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V52 - FINAL & COMPLETE BUILD        |
+// |   TELEGRAM FIREBASE BOT - V47 - ADVANCED REORDERING LOGIC     |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -250,45 +250,29 @@ const mainMessageHandler = async (ctx) => {
         // --- Handle specific user states for receiving text/media input ---
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
             
-            if (state === 'AWAITING_NEW_MESSAGE') {
-                const { buttonId, targetOrder } = stateData;
+            if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_REPLACEMENT_FILE' || state === 'AWAITING_EDITED_TEXT' || state === 'AWAITING_NEW_CAPTION') {
+                const { buttonId, messageId, targetOrder } = stateData;
                 if (!buttonId) {
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    return ctx.reply("⚠️ حدث خطأ: لم يتم العثور على الزر. تم إلغاء الإضافة.");
+                    return ctx.reply("⚠️ حدث خطأ: لم يتم العثور على الزر. تم إلغاء العملية.");
                 }
 
-                let type, content, caption = ctx.message.caption || '', entities = ctx.message.caption_entities || [];
-                if (ctx.message.text) { type = "text"; content = ctx.message.text; caption = ""; entities = ctx.message.entities || []; }
-                else if (ctx.message.photo) { type = "photo"; content = ctx.message.photo.pop().file_id; }
-                else if (ctx.message.video) { type = "video"; content = ctx.message.video.file_id; }
-                else if (ctx.message.document) { type = "document"; content = ctx.message.document.file_id; }
-                else if (ctx.message.audio) { type = "audio"; content = ctx.message.audio.file_id; }
-                else if (ctx.message.voice) { type = "voice"; content = ctx.message.voice.file_id; }
-                else { 
+                if (state === 'AWAITING_EDITED_TEXT' || state === 'AWAITING_NEW_CAPTION') {
+                    const newContent = ctx.message.text || ctx.message.caption;
+                    if (typeof newContent !== 'string') {
+                        return ctx.reply('⚠️ يرجى إرسال نص أو رسالة تحتوي على شرح.');
+                    }
+                    const newEntities = ctx.message.entities || ctx.message.caption_entities || [];
+                    const updateData = state === 'AWAITING_EDITED_TEXT' 
+                        ? { content: newContent, entities: newEntities, caption: '' }
+                        : { caption: newContent, entities: newEntities };
+                    
+                    await db.collection("messages").doc(messageId).update(updateData);
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    return ctx.reply("⚠️ نوع الرسالة غير مدعوم. تم إلغاء الإضافة.");
+                    await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث النص بنجاح.');
+                    return;
                 }
 
-                let order = 0;
-                if (typeof targetOrder === "number") {
-                    order = targetOrder;
-                } else {
-                    const lastMsg = await db.collection("messages").where("buttonId", "==", buttonId).orderBy("order", "desc").limit(1).get();
-                    if (!lastMsg.empty) order = lastMsg.docs[0].data().order + 1;
-                }
-
-                await db.collection("messages").add({ buttonId, type, content, caption, entities, order });
-                await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                await refreshAdminView(ctx, userId, buttonId, '✅ تم إضافة الرسالة بنجاح.');
-                return;
-            }
-
-            if(state === 'AWAITING_REPLACEMENT_FILE') {
-                const { messageId, buttonId } = stateData;
-                if (!messageId || !buttonId) {
-                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
-                }
                 let type, content, caption = ctx.message.caption || '', entities = ctx.message.caption_entities || [];
                 if (ctx.message.text) { type = "text"; content = ctx.message.text; caption = ""; entities = ctx.message.entities || []; }
                 else if (ctx.message.photo) { type = "photo"; content = ctx.message.photo.pop().file_id; }
@@ -301,41 +285,22 @@ const mainMessageHandler = async (ctx) => {
                     return ctx.reply("⚠️ نوع الرسالة غير مدعوم. تم إلغاء العملية.");
                 }
                 
-                await db.collection("messages").doc(messageId).update({ type, content, caption, entities });
-                await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                await refreshAdminView(ctx, userId, buttonId, '✅ تم استبدال الملف بنجاح.');
-                return;
-            }
-
-            if (state === 'AWAITING_EDITED_TEXT') {
-                 const { messageId, buttonId } = stateData;
-                 if (!messageId || !buttonId) {
-                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
+                if (state === 'AWAITING_REPLACEMENT_FILE') {
+                    await db.collection("messages").doc(messageId).update({ type, content, caption, entities });
+                    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                    await refreshAdminView(ctx, userId, buttonId, '✅ تم استبدال الملف بنجاح.');
+                } else { // AWAITING_NEW_MESSAGE
+                    let order = 0;
+                    if (typeof targetOrder === "number") {
+                        order = targetOrder;
+                    } else {
+                        const lastMsg = await db.collection("messages").where("buttonId", "==", buttonId).orderBy("order", "desc").limit(1).get();
+                        if (!lastMsg.empty) order = lastMsg.docs[0].data().order + 1;
+                    }
+                    await db.collection("messages").add({ buttonId, type, content, caption, entities, order });
+                    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                    await refreshAdminView(ctx, userId, buttonId, '✅ تم إضافة الرسالة بنجاح.');
                 }
-                if (!ctx.message.text) {
-                    return ctx.reply('⚠️ الإجراء يتطلب نصًا فقط.');
-                }
-                await db.collection("messages").doc(messageId).update({ content: ctx.message.text, entities: ctx.message.entities || [], caption: '' });
-                await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث النص بنجاح.');
-                return;
-            }
-
-            if (state === 'AWAITING_NEW_CAPTION') {
-                const { messageId, buttonId } = stateData;
-                 if (!messageId || !buttonId) {
-                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
-                }
-                const newCaption = ctx.message.text || ctx.message.caption;
-                if (typeof newCaption !== 'string') {
-                    return ctx.reply('⚠️ يرجى إرسال نص أو رسالة تحتوي على شرح.');
-                }
-                const newEntities = ctx.message.entities || ctx.message.caption_entities || [];
-                await db.collection("messages").doc(messageId).update({ caption: newCaption, entities: newEntities });
-                await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الشرح بنجاح.');
                 return;
             }
 
