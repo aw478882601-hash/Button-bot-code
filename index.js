@@ -96,7 +96,8 @@ async function generateKeyboard(userId) {
       adminControlRow.push(state === 'EDITING_CONTENT' ? '🚫 إلغاء تعديل المحتوى' : '📄 تعديل المحتوى');
       keyboardRows.push(adminControlRow);
     }
-    keyboardRows.push(['💬 التواصل مع الإدارة']);
+    // *** TEXT CHANGE 1 ***
+    keyboardRows.push(['💬 التواصل مع الأدمن']);
     return keyboardRows;
   } catch (error) {
     console.error('Error generating keyboard:', error);
@@ -250,7 +251,7 @@ const mainMessageHandler = async (ctx) => {
         // --- Handle specific user states for receiving text/media input ---
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
             
-            // *** FIX 1 START: Added handler for admin replies ***
+            // *** FIX: Added handler for admin replies ***
             if (state === 'AWAITING_ADMIN_REPLY') {
                 const { targetUserId } = stateData;
                 if (!targetUserId) {
@@ -260,7 +261,8 @@ const mainMessageHandler = async (ctx) => {
                 try {
                     await ctx.copyMessage(targetUserId);
                     const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ الرد على المشرف', `user:reply`) ]] };
-                    await bot.telegram.sendMessage(targetUserId, '✉️ رسالة جديدة من الإدارة.', { reply_markup: replyMarkup });
+                    // *** TEXT CHANGE 2 ***
+                    await bot.telegram.sendMessage(targetUserId, '✉️ رسالة جديدة من الأدمن.', { reply_markup: replyMarkup });
                     await ctx.reply('✅ تم إرسال ردك بنجاح.');
                 } catch (e) {
                     console.error(`Failed to send admin reply to user ${targetUserId}:`, e.message);
@@ -270,7 +272,6 @@ const mainMessageHandler = async (ctx) => {
                 }
                 return;
             }
-            // *** FIX 1 END ***
 
             if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_REPLACEMENT_FILE' || state === 'AWAITING_EDITED_TEXT' || state === 'AWAITING_NEW_CAPTION') {
                 const { buttonId, messageId, targetOrder } = stateData;
@@ -455,7 +456,8 @@ const mainMessageHandler = async (ctx) => {
                 } catch (e) { console.error(`Failed to send message to admin ${adminId}:`, e); }
             }
             await userRef.update({ state: 'NORMAL' });
-            await ctx.reply('✅ تم إرسال رسالتك إلى الإدارة بنجاح.');
+            // *** TEXT CHANGE 3 ***
+            await ctx.reply('✅ تم إرسال رسالتك إلى الأدمن بنجاح.');
             return;
         }
 
@@ -517,7 +519,8 @@ const mainMessageHandler = async (ctx) => {
                 const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
                 await userRef.update({ currentPath: newPath, stateData: {} });
                 return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
-            case '💬 التواصل مع الإدارة':
+            // *** TEXT CHANGE 4 ***
+            case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
                 return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)...');
             case '👑 الإشراف':
@@ -627,7 +630,7 @@ const mainMessageHandler = async (ctx) => {
         const buttonData = buttonDoc.data();
         const buttonId = buttonDoc.id;
 
-        // *** FIX 2: Added check to prevent non-admins from accessing adminOnly buttons ***
+        // *** FIX: Added check to prevent non-admins from accessing adminOnly buttons ***
         if (buttonData.adminOnly && !isAdmin) {
             return ctx.reply('🚫 عذراً، هذا القسم مخصص للمشرفين فقط.');
         }
@@ -731,6 +734,7 @@ bot.on('callback_query', async (ctx) => {
             }
         }
         if (action === 'btn') {
+            // This is the button reordering logic from the file you provided (index (7).js)
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
                 let buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
@@ -802,7 +806,7 @@ bot.on('callback_query', async (ctx) => {
                                     }
                                     actionTaken = true;
                                 }
-                            } else { 
+                            } else {
                                 batch.update(targetButton.ref, { isFullWidth: true });
                                 batch.update(partner.ref, { isFullWidth: true });
                                 const targetIdx = buttonList.findIndex(b => b.id === targetButton.id);
