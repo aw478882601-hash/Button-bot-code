@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V48 - FINAL & DEFINITIVE LOGIC      |
+// |   TELEGRAM FIREBASE BOT - V52 - FINAL COMPLETE BUILD          |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -257,19 +257,33 @@ const mainMessageHandler = async (ctx) => {
                     return ctx.reply("⚠️ حدث خطأ: لم يتم العثور على الزر. تم إلغاء العملية.");
                 }
 
-                if (state === 'AWAITING_EDITED_TEXT' || state === 'AWAITING_NEW_CAPTION') {
-                    const newContent = ctx.message.text || ctx.message.caption;
-                    if (typeof newContent !== 'string') {
+                if (state === 'AWAITING_EDITED_TEXT') {
+                     if (!messageId) {
+                         await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                        return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
+                    }
+                    if (!ctx.message.text) {
+                        return ctx.reply('⚠️ الإجراء يتطلب نصًا فقط.');
+                    }
+                    await db.collection("messages").doc(messageId).update({ content: ctx.message.text, entities: ctx.message.entities || [], caption: '' });
+                    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                    await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث النص بنجاح.');
+                    return;
+                }
+                
+                if (state === 'AWAITING_NEW_CAPTION') {
+                     if (!messageId) {
+                         await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                        return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
+                    }
+                    const newCaption = ctx.message.text || ctx.message.caption;
+                    if (typeof newCaption !== 'string') {
                         return ctx.reply('⚠️ يرجى إرسال نص أو رسالة تحتوي على شرح.');
                     }
                     const newEntities = ctx.message.entities || ctx.message.caption_entities || [];
-                    const updateData = state === 'AWAITING_EDITED_TEXT' 
-                        ? { content: newContent, entities: newEntities, caption: '' }
-                        : { caption: newContent, entities: newEntities };
-                    
-                    await db.collection("messages").doc(messageId).update(updateData);
+                    await db.collection("messages").doc(messageId).update({ caption: newCaption, entities: newEntities });
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث النص بنجاح.');
+                    await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الشرح بنجاح.');
                     return;
                 }
 
@@ -286,6 +300,10 @@ const mainMessageHandler = async (ctx) => {
                 }
                 
                 if (state === 'AWAITING_REPLACEMENT_FILE') {
+                    if (!messageId) {
+                        await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                        return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
+                    }
                     await db.collection("messages").doc(messageId).update({ type, content, caption, entities });
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم استبدال الملف بنجاح.');
@@ -733,10 +751,10 @@ bot.on('callback_query', async (ctx) => {
                             if (currentRow.length > 0) rows.push(currentRow);
                             const rowIndex = rows.findIndex(row => row.some(btn => btn.id === targetId));
                             
-                            if (subAction === 'up' && rowIndex > 0 && rows[rowIndex-1].length === 1) {
+                            if (subAction === 'up' && rowIndex > 0) {
                                 [rows[rowIndex], rows[rowIndex - 1]] = [rows[rowIndex - 1], rows[rowIndex]];
                                 actionTaken = true;
-                            } else if (subAction === 'down' && rowIndex < rows.length - 1 && rows[rowIndex+1].length === 1) {
+                            } else if (subAction === 'down' && rowIndex < rows.length - 1) {
                                 [rows[rowIndex], rows[rowIndex + 1]] = [rows[rowIndex + 1], rows[rowIndex]];
                                 actionTaken = true;
                             }
@@ -828,9 +846,9 @@ bot.on('callback_query', async (ctx) => {
                 });
             }
             if (subAction === 'edit') {
-                await userRef.update({ state: 'AWAITING_EDITED_TEXT', stateData: { messageId: targetId, buttonId: buttonId } });
+                await userRef.update({ state: 'AWAITING_REPLACEMENT_FILE', stateData: { messageId: targetId, buttonId: buttonId } });
                 await ctx.answerCbQuery();
-                return ctx.reply("📝 أرسل النص الجديد:", { reply_markup: { force_reply: true } });
+                return ctx.reply("📝 أرسل أو وجّه المحتوى الجديد:", { reply_markup: { force_reply: true } });
             }
             if (subAction === 'edit_caption') {
                 await userRef.update({ state: 'AWAITING_NEW_CAPTION', stateData: { messageId: targetId, buttonId: buttonId } });
