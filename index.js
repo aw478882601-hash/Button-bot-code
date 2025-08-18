@@ -430,8 +430,8 @@ const mainMessageHandler = async (ctx) => {
                     const { targetAdminId, targetAdminName } = stateData;
                     const adminsRef = db.collection('config').doc('admins');
                     if (state === 'AWAITING_ADD_ADMIN_CONFIRMATION') {
-                        await adminsRef.update({ ids: admin.firestore.FieldValue.arrayUnion(targetAdminId) });
-                        await db.collection('users').doc(targetAdminId).update({ isAdmin: true });
+                        await adminsRef.set({ ids: admin.firestore.FieldValue.arrayUnion(targetAdminId) }, { merge: true });
+                        await db.collection('users').doc(targetAdminId).set({ isAdmin: true }, { merge: true });
                         await ctx.reply(`✅ تم إضافة ${targetAdminName} كمشرف بنجاح.`);
                     } else { // AWAITING_REMOVE_ADMIN_CONFIRMATION
                         if (targetAdminId === process.env.SUPER_ADMIN_ID) {
@@ -579,14 +579,35 @@ const mainMessageHandler = async (ctx) => {
 
         if (currentPath === 'supervision' && isAdmin) {
              switch (text) {
-                case '📊 الإحصائيات':
+                case '📊 الإحصائيات': { // Using block scope for new variables
                     const totalUsers = (await db.collection('users').get()).size;
                     const todayStr = new Date().toISOString().split('T')[0];
                     const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
-                    const statsDoc = await db.collection('config').doc('stats').get();
+                    
+                    const statsRef = db.collection('config').doc('stats');
+                    let statsDoc = await statsRef.get();
+
+                    if (!statsDoc.exists || !statsDoc.data().initialized) {
+                        const initMsg = await ctx.reply('⏳ جارٍ حساب الإحصائيات لأول مرة، قد يستغرق هذا بعض الوقت...');
+                        
+                        const allButtons = await db.collection('buttons').get();
+                        const allMessages = await db.collection('messages').get();
+
+                        const initialStats = {
+                            totalButtons: allButtons.size,
+                            totalMessages: allMessages.size,
+                            initialized: true
+                        };
+                        
+                        await statsRef.set(initialStats, { merge: true });
+                        statsDoc = await statsRef.get();
+                        await ctx.telegram.deleteMessage(ctx.chat.id, initMsg.message_id).catch(() => {});
+                    }
+
                     const { totalButtons = 0, totalMessages = 0 } = statsDoc.data() || {};
                     const statsMessage = `📊 <b>إحصائيات البوت:</b>\n\n` + `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` + `🔘 الأزرار: <code>${totalButtons}</code>\n` + `✉️ الرسائل: <code>${totalMessages}</code>`;
                     return ctx.replyWithHTML(statsMessage);
+                }
                 case '🗣️ رسالة جماعية':
                     await userRef.update({ state: 'AWAITING_BROADCAST' });
                     return ctx.reply('أرسل الآن الرسالة التي تريد بثها لجميع المستخدمين:');
@@ -718,7 +739,6 @@ bot.on('callback_query', async (ctx) => {
                 return ctx.reply(`أرسل الآن ردك للمستخدم <code>${targetId}</code>:`, { parse_mode: 'HTML' });
             }
             if (subAction === 'ban') {
-                // *** FIX 2: Prevent Super Admin from being banned ***
                 if (targetId === process.env.SUPER_ADMIN_ID) {
                     return ctx.answerCbQuery('🚫 لا يمكن حظر الأدمن الرئيسي.', { show_alert: true });
                 }
@@ -749,7 +769,7 @@ bot.on('callback_query', async (ctx) => {
         if (action === 'btn') {
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 
-                // *** FIX 1: New button reordering logic based on "split-first" principle ***
+                // *** NEW "Split-First" Reordering Logic ***
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
                 const buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
                 
@@ -764,7 +784,8 @@ bot.on('callback_query', async (ctx) => {
                 });
                 if (currentRow.length > 0) rows.push(currentRow);
 
-                let targetRowIndex = -1, targetColIndex = -1;
+                let targetRowIndex = -1;
+                let targetColIndex = -1;
                 rows.find((row, rIndex) => {
                     const cIndex = row.findIndex(b => b.id === targetId);
                     if (cIndex !== -1) {
@@ -778,35 +799,38 @@ bot.on('callback_query', async (ctx) => {
                 if (targetRowIndex === -1) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
                 
                 let actionTaken = false;
-                const targetButton = rows[targetRowIndex][targetColIndex];
 
                 if (subAction === 'up') {
                     const isHalfWidth = rows[targetRowIndex].length > 1;
-                    if (isHalfWidth) { // إذا كان الزر مزدوجاً، قم بفصله دائماً
+                    if (isHalfWidth) { // إذا كان الزر مزدوجاً، قم بفصله دائماً أولاً
                         const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
-                        rows.splice(targetRowIndex, 1, [targetButton], [partner]);
+                        const self = rows[targetRowIndex][targetColIndex];
+                        rows.splice(targetRowIndex, 1, [self], [partner]);
                         actionTaken = true;
                     } else if (targetRowIndex > 0) { // إذا كان الزر فردياً
                         const rowAbove = rows[targetRowIndex - 1];
                         if (rowAbove.length === 1) { // وإذا كان الصف الذي فوقه فردياً أيضاً، ادمجهما
                             const buttonAbove = rowAbove[0];
-                            rows[targetRowIndex - 1] = [buttonAbove, targetButton];
+                            const self = rows[targetRowIndex][0];
+                            rows[targetRowIndex - 1] = [buttonAbove, self];
                             rows.splice(targetRowIndex, 1);
                             actionTaken = true;
                         }
                     }
                 } else if (subAction === 'down') {
                     const isHalfWidth = rows[targetRowIndex].length > 1;
-                    if (isHalfWidth) { // إذا كان الزر مزدوجاً، قم بفصله دائماً
+                    if (isHalfWidth) { // إذا كان الزر مزدوجاً، قم بفصله دائماً أولاً
                         const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
-                        rows.splice(targetRowIndex, 1, [partner], [targetButton]);
+                        const self = rows[targetRowIndex][targetColIndex];
+                        rows.splice(targetRowIndex, 1, [partner], [self]);
                         actionTaken = true;
                     } else if (targetRowIndex < rows.length - 1) { // إذا كان الزر فردياً
                         const rowBelow = rows[targetRowIndex + 1];
                         if (rowBelow.length === 1) { // وإذا كان الصف الذي تحته فردياً أيضاً، ادمجهما
                             const buttonBelow = rowBelow[0];
+                            const self = rows[targetRowIndex][0];
                             rows.splice(targetRowIndex, 1);
-                            rows[targetRowIndex] = [targetButton, buttonBelow];
+                            rows[targetRowIndex] = [self, buttonBelow]; // Index shifts up after splice
                             actionTaken = true;
                         }
                     }
@@ -821,7 +845,7 @@ bot.on('callback_query', async (ctx) => {
                     const newButtonList = rows.flat();
                     const batch = db.batch();
                     newButtonList.forEach((button, index) => {
-                        const newIsFullWidth = rows.find(r => r.includes(button)).length === 1;
+                        const newIsFullWidth = rows.find(r => r.some(b => b.id === button.id)).length === 1;
                         batch.update(button.ref, { 
                             order: index,
                             isFullWidth: newIsFullWidth
