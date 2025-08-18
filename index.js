@@ -96,17 +96,18 @@ async function generateKeyboard(userId) {
         keyboardRows.push([editButtonsText, editContentText]);
     }
 
-    const finalRow = [];
-    finalRow.push('💬 التواصل مع الأدمن');
-    if (isAdmin && currentPath === 'root') {
-        finalRow.push('👑 الإشراف');
-    }
-    keyboardRows.push(finalRow);
+  const finalRow = [];
+    finalRow.push('💬 التواصل مع الأدمن');
+    if (isAdmin && currentPath === 'root') {
+        finalRow.push('👑 الإشراف');
+    }
+    keyboardRows.push(finalRow);
 
-    return keyboardRows;   } catch (error) {
-    console.error('Error generating keyboard:', error);
-    return [['حدث خطأ في عرض الأزرار']];
-  }
+    return keyboardRows; // This should be the last line inside the 'try' block
+} catch (error) {
+    console.error('Error generating keyboard:', error);
+    return [['حدث خطأ في عرض الأزرار']];
+}
 }
 
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
