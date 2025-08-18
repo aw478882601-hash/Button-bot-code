@@ -189,7 +189,6 @@ async function updateButtonStats(buttonId, userId) {
     } catch (e) { console.error(`Button stats transaction failed for button ${buttonId}:`, e); }
 }
 
-// *** FIX 1: Modified recursiveDeleteButton to update stats counters ***
 async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, messages: 0 }) {
     const subButtons = await db.collection('buttons').where('parentId', '==', buttonPath).get();
     for (const sub of subButtons.docs) {
@@ -346,7 +345,6 @@ const mainMessageHandler = async (ctx) => {
                         if (!lastMsg.empty) order = lastMsg.docs[0].data().order + 1;
                     }
                     await db.collection("messages").add({ buttonId, type, content, caption, entities, order });
-                    // *** FIX 1: Increment message counter ***
                     await db.collection('config').doc('stats').set({ totalMessages: admin.firestore.FieldValue.increment(1) }, { merge: true });
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم إضافة الرسالة بنجاح.');
@@ -386,7 +384,6 @@ const mainMessageHandler = async (ctx) => {
                 const lastButton = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
                 const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
                 await db.collection('buttons').add({ text: newButtonName, parentId: currentPath, order: newOrder, adminOnly: false, isFullWidth: true });
-                // *** FIX 1: Increment button counter ***
                 await db.collection('config').doc('stats').set({ totalButtons: admin.firestore.FieldValue.increment(1) }, { merge: true });
                 await userRef.update({ state: 'EDITING_BUTTONS' });
                 await ctx.reply(`✅ تم إضافة الزر "${newButtonName}" بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
@@ -437,9 +434,13 @@ const mainMessageHandler = async (ctx) => {
                         await db.collection('users').doc(targetAdminId).update({ isAdmin: true });
                         await ctx.reply(`✅ تم إضافة ${targetAdminName} كمشرف بنجاح.`);
                     } else { // AWAITING_REMOVE_ADMIN_CONFIRMATION
-                        await adminsRef.update({ ids: admin.firestore.FieldValue.arrayRemove(targetAdminId) });
-                        await db.collection('users').doc(targetAdminId).update({ isAdmin: false });
-                        await ctx.reply(`🗑️ تم حذف ${targetAdminName} من قائمة المشرفين.`);
+                        if (targetAdminId === process.env.SUPER_ADMIN_ID) {
+                           await ctx.reply('🚫 لا يمكن حذف الأدمن الرئيسي.');
+                        } else {
+                           await adminsRef.update({ ids: admin.firestore.FieldValue.arrayRemove(targetAdminId) });
+                           await db.collection('users').doc(targetAdminId).update({ isAdmin: false });
+                           await ctx.reply(`🗑️ تم حذف ${targetAdminName} من قائمة المشرفين.`);
+                        }
                     }
                 } else {
                     await ctx.reply("تم إلغاء العملية.");
@@ -582,7 +583,6 @@ const mainMessageHandler = async (ctx) => {
                     const totalUsers = (await db.collection('users').get()).size;
                     const todayStr = new Date().toISOString().split('T')[0];
                     const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
-                    // *** FIX 1: Fetch stats from the counter document ***
                     const statsDoc = await db.collection('config').doc('stats').get();
                     const { totalButtons = 0, totalMessages = 0 } = statsDoc.data() || {};
                     const statsMessage = `📊 <b>إحصائيات البوت:</b>\n\n` + `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` + `🔘 الأزرار: <code>${totalButtons}</code>\n` + `✉️ الرسائل: <code>${totalMessages}</code>`;
@@ -718,6 +718,10 @@ bot.on('callback_query', async (ctx) => {
                 return ctx.reply(`أرسل الآن ردك للمستخدم <code>${targetId}</code>:`, { parse_mode: 'HTML' });
             }
             if (subAction === 'ban') {
+                // *** FIX 2: Prevent Super Admin from being banned ***
+                if (targetId === process.env.SUPER_ADMIN_ID) {
+                    return ctx.answerCbQuery('🚫 لا يمكن حظر الأدمن الرئيسي.', { show_alert: true });
+                }
                 await db.collection('users').doc(targetId).update({ banned: true });
                 await ctx.answerCbQuery();
                 await ctx.editMessageText(`🚫 تم حظر المستخدم <code>${targetId}</code> بنجاح.`, { parse_mode: 'HTML' });
@@ -744,7 +748,8 @@ bot.on('callback_query', async (ctx) => {
         }
         if (action === 'btn') {
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
-                // *** FIX 2: Complete rebuild of the reordering logic ***
+                
+                // *** FIX 1: New button reordering logic based on "split-first" principle ***
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
                 const buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
                 
@@ -759,8 +764,7 @@ bot.on('callback_query', async (ctx) => {
                 });
                 if (currentRow.length > 0) rows.push(currentRow);
 
-                let targetRowIndex = -1;
-                let targetColIndex = -1;
+                let targetRowIndex = -1, targetColIndex = -1;
                 rows.find((row, rIndex) => {
                     const cIndex = row.findIndex(b => b.id === targetId);
                     if (cIndex !== -1) {
@@ -778,60 +782,33 @@ bot.on('callback_query', async (ctx) => {
 
                 if (subAction === 'up') {
                     const isHalfWidth = rows[targetRowIndex].length > 1;
-                    if (targetRowIndex > 0) {
-                        const rowAbove = rows[targetRowIndex - 1];
-                        if (isHalfWidth && rowAbove.length === 1) {
-                            // الأولوية: زر مزدوج يصعد ليندمج مع زر فردي
-                            const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
-                            const buttonAbove = rowAbove[0];
-                            rows[targetRowIndex - 1] = [buttonAbove, targetButton];
-                            rows[targetRowIndex] = [partner];
-                            actionTaken = true;
-                        } else if (!isHalfWidth && rowAbove.length === 1) {
-                            // زر فردي يصعد ليندمج مع زر فردي
-                            const buttonAbove = rowAbove[0];
-                            rows[targetRowIndex - 1] = [buttonAbove, targetButton];
-                            rows.splice(targetRowIndex, 1);
-                            actionTaken = true;
-                        } else if (isHalfWidth) {
-                            // زر مزدوج يصعد ليفصل نفسه عن شريكه
-                            const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
-                            rows.splice(targetRowIndex, 1, [targetButton], [partner]);
-                            actionTaken = true;
-                        }
-                    } else if (isHalfWidth) {
-                        // فصل الصف العلوي المزدوج
+                    if (isHalfWidth) { // إذا كان الزر مزدوجاً، قم بفصله دائماً
                         const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
                         rows.splice(targetRowIndex, 1, [targetButton], [partner]);
                         actionTaken = true;
+                    } else if (targetRowIndex > 0) { // إذا كان الزر فردياً
+                        const rowAbove = rows[targetRowIndex - 1];
+                        if (rowAbove.length === 1) { // وإذا كان الصف الذي فوقه فردياً أيضاً، ادمجهما
+                            const buttonAbove = rowAbove[0];
+                            rows[targetRowIndex - 1] = [buttonAbove, targetButton];
+                            rows.splice(targetRowIndex, 1);
+                            actionTaken = true;
+                        }
                     }
                 } else if (subAction === 'down') {
                     const isHalfWidth = rows[targetRowIndex].length > 1;
-                    if (targetRowIndex < rows.length - 1) {
+                    if (isHalfWidth) { // إذا كان الزر مزدوجاً، قم بفصله دائماً
+                        const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
+                        rows.splice(targetRowIndex, 1, [partner], [targetButton]);
+                        actionTaken = true;
+                    } else if (targetRowIndex < rows.length - 1) { // إذا كان الزر فردياً
                         const rowBelow = rows[targetRowIndex + 1];
-                        if (isHalfWidth && rowBelow.length === 1) {
-                            // الأولوية: زر مزدوج ينزل ليندمج مع زر فردي
-                            const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
-                            const buttonBelow = rowBelow[0];
-                            rows[targetRowIndex] = [partner];
-                            rows[targetRowIndex + 1] = [targetButton, buttonBelow];
-                            actionTaken = true;
-                        } else if (!isHalfWidth && rowBelow.length === 1) {
-                            // زر فردي ينزل ليندمج مع زر فردي
+                        if (rowBelow.length === 1) { // وإذا كان الصف الذي تحته فردياً أيضاً، ادمجهما
                             const buttonBelow = rowBelow[0];
                             rows.splice(targetRowIndex, 1);
-                            rows[targetRowIndex] = [targetButton, buttonBelow]; // The index of rowBelow shifts up
-                            actionTaken = true;
-                        } else if (isHalfWidth) {
-                            // زر مزدوج ينزل ليفصل نفسه عن شريكه
-                            const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
-                            rows.splice(targetRowIndex, 1, [partner], [targetButton]);
+                            rows[targetRowIndex] = [targetButton, buttonBelow];
                             actionTaken = true;
                         }
-                    } else if (isHalfWidth) {
-                        // تبديل أزرار الصف السفلي المزدوج
-                        [rows[targetRowIndex][0], rows[targetRowIndex][1]] = [rows[targetRowIndex][1], rows[targetRowIndex][0]];
-                        actionTaken = true;
                     }
                 } else if (subAction === 'left' || subAction === 'right') {
                     if (rows[targetRowIndex].length > 1) {
@@ -873,7 +850,8 @@ bot.on('callback_query', async (ctx) => {
                 const deletedCounts = await recursiveDeleteButton(buttonToDeletePath);
                 
                 if (deletedCounts.buttons > 0 || deletedCounts.messages > 0) {
-                    await db.collection('config').doc('stats').set({
+                    const statsRef = db.collection('config').doc('stats');
+                    await statsRef.set({
                         totalButtons: admin.firestore.FieldValue.increment(-deletedCounts.buttons),
                         totalMessages: admin.firestore.FieldValue.increment(-deletedCounts.messages)
                     }, { merge: true });
