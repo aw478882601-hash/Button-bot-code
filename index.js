@@ -49,6 +49,7 @@ async function generateKeyboard(userId) {
     let keyboardRows = [];
    if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
         keyboardRows.unshift(['✅ النقل إلى هنا', '❌ إلغاء النقل']);
+   }
     if (currentPath === 'supervision') {
         keyboardRows = [
             ['📊 الإحصائيات', '🗣️ رسالة جماعية'],
@@ -79,7 +80,7 @@ async function generateKeyboard(userId) {
     if (currentRow.length > 0) keyboardRows.push(currentRow);
     if (isAdmin) {
       const adminActionRow = [];
-      if (state === 'EDITING_BUTTONS') adminActionRow.push('➕ إضافة زر');   adminActionRow.push('✂️ نقل زر');
+      if (state === 'EDITING_BUTTONS') { adminActionRow.push('➕ إضافة زر');   adminActionRow.push('✂️ نقل زر'); }
       if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
         adminActionRow.push('➕ إضافة رسالة');
       }
@@ -612,7 +613,7 @@ const mainMessageHandler = async (ctx) => {
                     return ctx.reply('📝 أرسل أو وجّه الرسالة الجديدة:', { reply_markup: { force_reply: true } });
                 }
                 break;
-        }
+        
      case '✂️ نقل زر':
 
                 if (isAdmin && state === 'EDITING_BUTTONS') {
