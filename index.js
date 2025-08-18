@@ -1043,10 +1043,10 @@ bot.on('callback_query', async (ctx) => {
                 });
             }
             if (subAction === 'edit') {
-                await userRef.update({ state: 'AWAITING_EDITED_TEXT', stateData: { messageId: targetId, buttonId: buttonId } });
-                await ctx.answerCbQuery();
-                return ctx.reply("📝 أرسل أو وجّه المحتوى الجديد:", { reply_markup: { force_reply: true } });
-            }
+                await userRef.update({ state: 'AWAITING_REPLACEMENT_FILE', stateData: { messageId: targetId, buttonId: buttonId } });
+                await ctx.answerCbQuery();
+                return ctx.reply("📝 أرسل أو وجّه المحتوى الجديد (نص أو ملف):", { reply_markup: { force_reply: true } });
+            }
              if (subAction === 'edit_caption') {
                 await userRef.update({ state: 'AWAITING_NEW_CAPTION', stateData: { messageId: targetId, buttonId: buttonId } });
                 await ctx.answerCbQuery();
