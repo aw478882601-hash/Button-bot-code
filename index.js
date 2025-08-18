@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V44 - REVERT TO DOUBLE-PRESS UI     |
+// |   TELEGRAM FIREBASE BOT - V46 - FINAL COMPLETE BUILD          |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -245,28 +245,22 @@ const mainMessageHandler = async (ctx) => {
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await userRef.update({ lastActive: new Date().toISOString().split('T')[0] });
 
-        // --- Handle specific user states for receiving text input ---
-        if (isAdmin && state !== 'NORMAL') {
-            if (state === 'AWAITING_BROADCAST') {
+        // --- Handle specific user states for receiving text/media input ---
+        if (state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
+            if (isAdmin && state === 'AWAITING_BROADCAST') {
                 const allUsers = await db.collection('users').where('banned', '==', false).get();
-                let successCount = 0;
-                let failureCount = 0;
+                let successCount = 0; let failureCount = 0;
                 const statusMessage = await ctx.reply(`⏳ جاري إرسال الرسالة إلى ${allUsers.size} مستخدم...`);
                 for (const doc of allUsers.docs) {
-                    try {
-                        await ctx.copyMessage(doc.id);
-                        successCount++;
-                    } catch (e) {
-                        failureCount++;
-                        console.error(`Failed to broadcast to user ${doc.id}:`, e.message);
-                    }
+                    try { await ctx.copyMessage(doc.id); successCount++; } 
+                    catch (e) { failureCount++; console.error(`Failed to broadcast to user ${doc.id}:`, e.message); }
                 }
                 await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ تم الإرسال بنجاح إلى ${successCount} مستخدم.\n❌ فشل الإرسال إلى ${failureCount} مستخدم.`);
                 await userRef.update({ state: 'NORMAL' });
                 return;
             }
 
-            if (state === 'AWAITING_WELCOME_MESSAGE') {
+            if (isAdmin && state === 'AWAITING_WELCOME_MESSAGE') {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال رسالة نصية فقط.');
                 await db.collection('config').doc('settings').set({ welcomeMessage: ctx.message.text }, { merge: true });
                 await ctx.reply('✅ تم تحديث رسالة الترحيب بنجاح.');
@@ -274,7 +268,7 @@ const mainMessageHandler = async (ctx) => {
                 return;
             }
 
-            if (state === 'AWAITING_NEW_BUTTON_NAME') {
+            if (isAdmin && state === 'AWAITING_NEW_BUTTON_NAME') {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
                 const newButtonName = ctx.message.text;
                 const existingButton = await db.collection('buttons').where('parentId', '==', currentPath).where('text', '==', newButtonName).limit(1).get();
@@ -290,7 +284,7 @@ const mainMessageHandler = async (ctx) => {
                 return;
             }
 
-            if (state === 'AWAITING_RENAME') {
+            if (isAdmin && state === 'AWAITING_RENAME') {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
                 const newButtonName = ctx.message.text;
                 const buttonIdToRename = stateData.buttonId;
@@ -310,28 +304,28 @@ const mainMessageHandler = async (ctx) => {
                 await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
             }
-        }
         
-        if (state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
-            const adminsDoc = await db.collection('config').doc('admins').get();
-            const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
-            if (adminIds.length === 0) {
+            if (state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
+                const adminsDoc = await db.collection('config').doc('admins').get();
+                const adminIds = (adminsDoc.exists && Array.isArray(adminsDoc.data().ids)) ? adminsDoc.data().ids : [];
+                if (adminIds.length === 0) {
+                    await userRef.update({ state: 'NORMAL' });
+                    return ctx.reply('⚠️ عذراً، لا يوجد مشرفون متاحون حالياً لتلقي رسالتك.');
+                }
+                const from = ctx.from;
+                const messagePrefix = state === 'REPLYING_TO_ADMIN' ? '📝 <b>رد من مستخدم!</b>' : '👤 <b>رسالة جديدة من مستخدم!</b>';
+                const userDetails = `${messagePrefix}\n\n<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}` + `\n<b>المعرف:</b> @${from.username || 'لا يوجد'}` + `\n<b>ID:</b> <code>${from.id}</code>`;
+                for (const adminId of adminIds) {
+                    try {
+                        const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ رد', `admin:reply:${from.id}`), Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`) ]] };
+                        await bot.telegram.sendMessage(adminId, userDetails, { parse_mode: 'HTML', reply_markup: replyMarkup });
+                        await ctx.copyMessage(adminId);
+                    } catch (e) { console.error(`Failed to send message to admin ${adminId}:`, e); }
+                }
                 await userRef.update({ state: 'NORMAL' });
-                return ctx.reply('⚠️ عذراً، لا يوجد مشرفون متاحون حالياً لتلقي رسالتك.');
+                await ctx.reply('✅ تم إرسال رسالتك إلى الإدارة بنجاح.');
+                return;
             }
-            const from = ctx.from;
-            const messagePrefix = state === 'REPLYING_TO_ADMIN' ? '📝 <b>رد من مستخدم!</b>' : '👤 <b>رسالة جديدة من مستخدم!</b>';
-            const userDetails = `${messagePrefix}\n\n<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}` + `\n<b>المعرف:</b> @${from.username || 'لا يوجد'}` + `\n<b>ID:</b> <code>${from.id}</code>`;
-            for (const adminId of adminIds) {
-                try {
-                    const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ رد', `admin:reply:${from.id}`), Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`) ]] };
-                    await bot.telegram.sendMessage(adminId, userDetails, { parse_mode: 'HTML', reply_markup: replyMarkup });
-                    await ctx.copyMessage(adminId);
-                } catch (e) { console.error(`Failed to send message to admin ${adminId}:`, e); }
-            }
-            await userRef.update({ state: 'NORMAL' });
-            await ctx.reply('✅ تم إرسال رسالتك إلى الإدارة بنجاح.');
-            return;
         }
 
         if (ctx.message && ctx.message.reply_to_message) {
@@ -436,11 +430,11 @@ const mainMessageHandler = async (ctx) => {
 
         switch (text) {
             case '🔝 القائمة الرئيسية':
-                await userRef.update({ currentPath: 'root', state: 'NORMAL', stateData: {} });
+                await userRef.update({ currentPath: 'root', stateData: {} }); // State is NOT reset
                 return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '🔙 رجوع':
                 const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
-                await userRef.update({ currentPath: newPath, state: 'NORMAL', stateData: {} });
+                await userRef.update({ currentPath: newPath, stateData: {} }); // State is NOT reset
                 return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '💬 التواصل مع الإدارة':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
@@ -546,24 +540,35 @@ const mainMessageHandler = async (ctx) => {
         
         await updateButtonStats(buttonId, userId);
         const potentialNewPath = `${currentPath}/${buttonId}`;
-        const subButtonsSnapshot = await db.collection('buttons').where('parentId', '==', potentialNewPath).limit(1).get();
+        
+        const subButtonsQuery = db.collection('buttons').where('parentId', '==', potentialNewPath).limit(1).get();
+        const messagesQuery = db.collection('messages').where('buttonId', '==', buttonId).limit(1).get();
+        const [subButtonsSnapshot, messagesSnapshot] = await Promise.all([subButtonsQuery, messagesQuery]);
+        const hasSubButtons = !subButtonsSnapshot.empty;
+        const hasMessages = !messagesSnapshot.empty;
 
-        await userRef.update({ currentPath: potentialNewPath });
-
-        if (!subButtonsSnapshot.empty) {
-            if (state === 'EDITING_CONTENT') {
-                await clearAndResendMessages(ctx, userId, buttonId);
-            } else {
-                await sendButtonMessages(ctx, buttonId, false);
-            }
-            await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
-        } else {
-            const messageCount = await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
-            if (messageCount > 0) {
+        if (isAdmin && (state === 'EDITING_CONTENT' || state === 'EDITING_BUTTONS')) {
+             await userRef.update({ currentPath: potentialNewPath });
+             const messageCount = await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
+             if (hasSubButtons) {
+                await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
+             } else if (messageCount > 0) {
                  await ctx.reply(`تم عرض المحتوى. استخدم الأزرار بالأسفل للرجوع.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-            } else if (state === 'EDITING_CONTENT') {
+            } else {
                 await ctx.reply('هذا الزر فارغ. يمكنك الآن إضافة رسائل.', Markup.keyboard(await generateKeyboard(userId)).resize());
             }
+        }
+        else if (hasSubButtons || hasMessages) {
+            await userRef.update({ currentPath: potentialNewPath });
+            if (hasSubButtons) {
+                await sendButtonMessages(ctx, buttonId, false);
+                await ctx.reply(`أنت الآن في قسم: ${text}`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            } else {
+                await sendButtonMessages(ctx, buttonId, false);
+                await ctx.reply(`تم عرض المحتوى. استخدم الأزرار بالأسفل للرجوع.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            }
+        } else {
+            return ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
     } catch (error) {
         console.error("FATAL ERROR in mainMessageHandler:", error);
@@ -628,49 +633,55 @@ bot.on('callback_query', async (ctx) => {
                 if (currentIndex === -1) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
                 let actionTaken = false;
                 const batch = db.batch();
-
+                
                 if (subAction === 'up' || subAction === 'down') {
-                    if (subAction === 'up' && currentIndex > 0 && buttonList[currentIndex].isFullWidth && buttonList[currentIndex - 1].isFullWidth) {
-                        batch.update(buttonList[currentIndex].ref, { isFullWidth: false });
-                        batch.update(buttonList[currentIndex - 1].ref, { isFullWidth: false });
-                        actionTaken = true;
-                    }
-                    else if (subAction === 'down' && !buttonList[currentIndex].isFullWidth) {
+                    const buttonClicked = buttonList[currentIndex];
+                    if (!buttonClicked.isFullWidth) {
                         const partnerIndex = (currentIndex % 2 === 0) ? currentIndex + 1 : currentIndex - 1;
                         if (partnerIndex >= 0 && partnerIndex < buttonList.length && !buttonList[partnerIndex].isFullWidth) {
-                            batch.update(buttonList[currentIndex].ref, { isFullWidth: true });
+                            batch.update(buttonClicked.ref, { isFullWidth: true });
                             batch.update(buttonList[partnerIndex].ref, { isFullWidth: true });
                             actionTaken = true;
                         }
-                    }
-                    
-                    if (!actionTaken) {
-                        let rows = [];
-                        let currentRow = [];
-                        buttonList.forEach(btn => {
-                            currentRow.push(btn);
-                            if (btn.isFullWidth || currentRow.length === 2) {
-                                rows.push(currentRow);
-                                currentRow = [];
-                            }
-                        });
-                        if (currentRow.length > 0) rows.push(currentRow);
-                        
-                        const rowIndex = rows.findIndex(row => row.some(btn => btn.id === targetId));
-                        
-                        if (subAction === 'up' && rowIndex > 0) {
-                            [rows[rowIndex], rows[rowIndex - 1]] = [rows[rowIndex - 1], rows[rowIndex]];
-                            actionTaken = true;
-                        } else if (subAction === 'down' && rowIndex < rows.length - 1) {
-                            [rows[rowIndex], rows[rowIndex + 1]] = [rows[rowIndex + 1], rows[rowIndex]];
+                    } 
+                    else {
+                        if (subAction === 'up' && currentIndex > 0 && buttonList[currentIndex - 1].isFullWidth) {
+                            batch.update(buttonClicked.ref, { isFullWidth: false });
+                            batch.update(buttonList[currentIndex - 1].ref, { isFullWidth: false });
                             actionTaken = true;
                         }
-                        if (actionTaken) {
-                            buttonList = rows.flat();
+                        
+                        if (!actionTaken) {
+                            let rows = []; let currentRow = [];
+                            buttonList.forEach(btn => {
+                                currentRow.push(btn);
+                                if (btn.isFullWidth || currentRow.length === 2) { rows.push(currentRow); currentRow = []; }
+                            });
+                            if (currentRow.length > 0) rows.push(currentRow);
+                            
+                            const rowIndex = rows.findIndex(row => row.some(btn => btn.id === targetId));
+                            
+                            if (subAction === 'up' && rowIndex > 0) {
+                                [rows[rowIndex], rows[rowIndex - 1]] = [rows[rowIndex - 1], rows[rowIndex]];
+                                actionTaken = true;
+                            } else if (subAction === 'down' && rowIndex < rows.length - 1) {
+                                [rows[rowIndex], rows[rowIndex + 1]] = [rows[rowIndex + 1], rows[rowIndex]];
+                                actionTaken = true;
+                            }
+                            if (actionTaken) { buttonList = rows.flat(); }
                         }
                     }
                 } else if (subAction === 'left' || subAction === 'right') {
-                    // Standard left/right swap for pairs
+                    let swapIndex = -1;
+                    if (subAction === 'right' && currentIndex % 2 === 0 && currentIndex + 1 < buttonList.length && !buttonList[currentIndex].isFullWidth && !buttonList[currentIndex + 1]?.isFullWidth) {
+                        swapIndex = currentIndex + 1;
+                    } else if (subAction === 'left' && currentIndex % 2 === 1 && !buttonList[currentIndex].isFullWidth && !buttonList[currentIndex - 1]?.isFullWidth) {
+                        swapIndex = currentIndex - 1;
+                    }
+                    if (swapIndex !== -1) {
+                        [buttonList[currentIndex], buttonList[swapIndex]] = [buttonList[swapIndex], buttonList[currentIndex]];
+                        actionTaken = true;
+                    }
                 }
 
                 if (actionTaken) {
