@@ -84,28 +84,26 @@ async function generateKeyboard(userId) {
       if (adminActionRow.length > 0) keyboardRows.push(adminActionRow);
     }
     
-    // *** NEW: Re-structured fixed control buttons ***
+    // *** NEW: Re-structured and Flipped fixed control buttons ***
     // الصف الأول: القائمة الرئيسية والرجوع
     if (currentPath !== 'root') {
-        keyboardRows.push(['🔝 القائمة الرئيسية', '🔙 رجوع']);
+        keyboardRows.push(['🔙 رجوع', '🔝 القائمة الرئيسية']);
     }
 
     // الصف الثاني: أزرار تعديل المحتوى والأزرار (للمشرف فقط)
     if (isAdmin) {
         const editContentText = state === 'EDITING_CONTENT' ? '🚫 إلغاء تعديل المحتوى' : '📄 تعديل المحتوى';
         const editButtonsText = state === 'EDITING_BUTTONS' ? '🚫 إلغاء تعديل الأزرار' : '✏️ تعديل الأزرار';
-        keyboardRows.push([editContentText, editButtonsText]);
+        keyboardRows.push([editButtonsText, editContentText]);
     }
 
     // الصف الثالث: الإشراف والتواصل مع الأدمن
     const finalRow = [];
-    // في اللغة العربية، العنصر الأول في المصفوفة يظهر يميناً
+    // في اللغة العربية، العنصر الأول في المصفوفة يظهر يميناً، لذلك نعكس الترتيب المطلوب
+    finalRow.push('💬 التواصل مع الأدمن');
     if (isAdmin && currentPath === 'root') {
         finalRow.push('👑 الإشراف');
     }
-    finalRow.push('💬 التواصل مع الأدمن');
-    
-    // إذا كان الصف يحتوي على زر واحد فقط، سيأخذ عرض الشاشة كاملاً
     keyboardRows.push(finalRow);
 
     return keyboardRows;
