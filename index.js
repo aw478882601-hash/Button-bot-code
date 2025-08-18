@@ -103,8 +103,7 @@ async function generateKeyboard(userId) {
     }
     keyboardRows.push(finalRow);
 
-    return keyboardRows;
-  catch (error) {
+    return keyboardRows;   } catch (error) {
     console.error('Error generating keyboard:', error);
     return [['حدث خطأ في عرض الأزرار']];
   }
