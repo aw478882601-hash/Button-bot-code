@@ -922,6 +922,31 @@ bot.on('callback_query', async (ctx) => {
         }
         if (!userDoc.data().isAdmin) return ctx.answerCbQuery('غير مصرح لك.', { show_alert: true });
         const { currentPath } = userDoc.data();
+      // --- Handler for Button Deletion Confirmation ---
+if (action === 'confirm_delete_button') {
+    if (subAction === 'no') {
+        await ctx.editMessageText('👍 تم إلغاء عملية الحذف.');
+        return ctx.answerCbQuery();
+    }
+
+    if (subAction === 'yes') {
+        await ctx.editMessageText('⏳ جارٍ الحذف...');
+        const buttonToDeletePath = `${currentPath}/${targetId}`;
+        const deletedCounts = await recursiveDeleteButton(buttonToDeletePath);
+
+        if (deletedCounts.buttons > 0 || deletedCounts.messages > 0) {
+            const statsRef = db.collection('config').doc('stats');
+            await statsRef.set({
+                totalButtons: admin.firestore.FieldValue.increment(-deletedCounts.buttons),
+                totalMessages: admin.firestore.FieldValue.increment(-deletedCounts.messages)
+            }, { merge: true });
+        }
+
+        await ctx.deleteMessage().catch(()=>{});
+        await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
+        return ctx.answerCbQuery('✅ تم الحذف');
+    }
+}
         if (action === 'admin') {
            if (subAction === 'reply') {
                 await userRef.update({ state: 'AWAITING_ADMIN_REPLY', stateData: { targetUserId: targetId } });
@@ -1059,23 +1084,17 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.editMessageText('أدخل الاسم الجديد:');
                 return;
             }
-            if (subAction === 'delete') {
-                const buttonToDeletePath = `${currentPath}/${targetId}`;
-                const deletedCounts = await recursiveDeleteButton(buttonToDeletePath);
-                
-                if (deletedCounts.buttons > 0 || deletedCounts.messages > 0) {
-                    const statsRef = db.collection('config').doc('stats');
-                    await statsRef.set({
-                        totalButtons: admin.firestore.FieldValue.increment(-deletedCounts.buttons),
-                        totalMessages: admin.firestore.FieldValue.increment(-deletedCounts.messages)
-                    }, { merge: true });
-                }
-                
-                await ctx.answerCbQuery('✅ تم الحذف بنجاح');
-                await ctx.deleteMessage().catch(()=>{});
-                await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                return;
-            }
+           if (subAction === 'delete') {
+    const buttonDoc = await db.collection('buttons').doc(targetId).get();
+    if (!buttonDoc.exists) return ctx.answerCbQuery('الزر غير موجود بالفعل.');
+
+    const confirmationKeyboard = Markup.inlineKeyboard([
+        Markup.button.callback('✅ نعم، قم بالحذف', `confirm_delete_button:yes:${targetId}`),
+        Markup.button.callback('❌ إلغاء', `confirm_delete_button:no:${targetId}`)
+    ]);
+    await ctx.editMessageText(`🗑️ هل أنت متأكد من حذف الزر "${buttonDoc.data().text}" وكل ما بداخله؟ هذا الإجراء لا يمكن التراجع عنه.`, confirmationKeyboard);
+    return;
+}
             if (subAction === 'adminonly') {
                 const buttonRef = db.collection('buttons').doc(targetId);
                 const buttonDoc = await buttonRef.get();
