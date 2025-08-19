@@ -326,7 +326,12 @@ bot.start(async (ctx) => {
         if (!userDoc.exists) {
             await userRef.set({ chatId: ctx.chat.id, isAdmin, currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: today, banned: false });
           await db.collection('config').doc('stats').set({ totalUsers: admin.firestore.FieldValue.increment(1) }, { merge: true });
+          
           if (adminIds.length > 0) {
+                // Read the new total number of users
+                const statsDoc = await db.collection('config').doc('stats').get();
+                const totalUsers = statsDoc.data()?.totalUsers || 1;
+
                 const user = ctx.from;
                 const userName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
                 const userLink = `tg://user?id=${user.id}`;
