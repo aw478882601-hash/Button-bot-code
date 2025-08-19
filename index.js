@@ -30,6 +30,63 @@ async function trackSentMessages(userId, messageIds) {
     const userRef = db.collection('users').doc(String(userId));
     await userRef.update({ 'stateData.messageViewIds': messageIds });
 }
+async function getTopButtons(period) {
+    const allButtonsSnapshot = await db.collection('buttons').get();
+    let buttonStats = [];
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+
+    for (const doc of allButtonsSnapshot.docs) {
+        const button = doc.data();
+        const stats = button.stats || {};
+        let clicks = 0;
+        let users = 0;
+
+        if (period === 'today') {
+            clicks = stats.dailyClicks?.[todayStr] || 0;
+            users = stats.dailyUsers?.[todayStr]?.length || 0;
+        } else if (period === 'all_time') {
+            clicks = stats.totalClicks || 0;
+            users = stats.totalUsers?.length || 0;
+        } else if (period === 'weekly') {
+            let weeklyClicks = 0;
+            let weeklyUsersSet = new Set();
+            for (let i = 0; i < 7; i++) {
+                const d = new Date();
+                d.setDate(d.getDate() - i);
+                const dateStr = d.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+                weeklyClicks += stats.dailyClicks?.[dateStr] || 0;
+                if (stats.dailyUsers?.[dateStr]) {
+                    stats.dailyUsers[dateStr].forEach(userId => weeklyUsersSet.add(userId));
+                }
+            }
+            clicks = weeklyClicks;
+            users = weeklyUsersSet.size;
+        }
+
+        if (clicks > 0) {
+            buttonStats.push({
+                name: button.text,
+                clicks: clicks,
+                users: users
+            });
+        }
+    }
+
+    // Sort by clicks descending
+    buttonStats.sort((a, b) => b.clicks - a.clicks);
+
+    const top10 = buttonStats.slice(0, 10);
+
+    if (top10.length === 0) {
+        return 'لا توجد بيانات لعرضها في هذه الفترة.';
+    }
+
+    let report = top10.map((btn, index) => 
+        `${index + 1}. *${btn.name}*\n   - 🖱️ الضغطات: \`${btn.clicks}\`\n   - 👤 المستخدمون: \`${btn.users}\``
+    ).join('\n\n');
+
+    return report;
+}
 
 async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '✅ تم تحديث العرض.') {
     const userDoc = await db.collection('users').doc(String(userId)).get();
@@ -683,38 +740,14 @@ const mainMessageHandler = async (ctx) => {
         if (currentPath === 'supervision' && isAdmin) {
              switch (text) {
                 case '📊 الإحصائيات': {
-                    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-                    const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
-                    
-                    const statsRef = db.collection('config').doc('stats');
-                    let statsDoc = await statsRef.get();
-
-                    // This block runs only once to set the initial stats
-                    if (!statsDoc.exists || !statsDoc.data().initialized) {
-                        const initMsg = await ctx.reply('⏳ جارٍ حساب الإحصائيات لأول مرة، قد يستغرق هذا بعض الوقت...');
-                        
-                        const allButtons = await db.collection('buttons').get();
-                        const allMessages = await db.collection('messages').get();
-                        // Get the current number of users to initialize the counter
-                        const allUsers = await db.collection('users').get();
-
-                        const initialStats = {
-                            totalButtons: allButtons.size,
-                            totalMessages: allMessages.size,
-                            totalUsers: allUsers.size, // Initialize the counter with the correct current value
-                            initialized: true
-                        };
-                        
-                        await statsRef.set(initialStats, { merge: true });
-                        statsDoc = await statsRef.get(); // Re-fetch the document with the new data
-                        await ctx.telegram.deleteMessage(ctx.chat.id, initMsg.message_id).catch(() => {});
-                    }
-
-                    // Read all stats, including the new totalUsers counter
-                    const { totalButtons = 0, totalMessages = 0, totalUsers = 0 } = statsDoc.data() || {};
-                    const statsMessage = `📊 <b>إحصائيات البوت:</b>\n\n` + `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` + `🔘 الأزرار: <code>${totalButtons}</code>\n` + `✉️ الرسائل: <code>${totalMessages}</code>`;
-                    
-                    return ctx.replyWithHTML(statsMessage);
+                    const statsKeyboard = Markup.inlineKeyboard([
+                        [Markup.button.callback('📊 الإحصائيات العامة', 'stats:general')],
+                        [Markup.button.callback('🔥 الأكثر استخداماً (اليوم)', 'stats:top_today')],
+                        [Markup.button.callback('📅 الأكثر استخداماً (أسبوع)', 'stats:top_weekly')],
+                        [Markup.button.callback('🏆 الأكثر استخداماً (الكلي)', 'stats:top_all_time')],
+                        [Markup.button.callback('👥 المستخدمون غير النشطين', 'stats:inactive_users')]
+                    ]);
+                    return ctx.reply('اختر نوع التقرير الذي تريد عرضه:', statsKeyboard);
                 }
                 case '🗣️ رسالة جماعية':
                     await userRef.update({ state: 'AWAITING_BROADCAST' });
@@ -848,6 +881,111 @@ bot.on('callback_query', async (ctx) => {
         }
         if (!userDoc.data().isAdmin) return ctx.answerCbQuery('غير مصرح لك.', { show_alert: true });
         const { currentPath } = userDoc.data();
+      if (action === 'stats') {
+
+            await ctx.answerCbQuery('⏳ جارٍ تجهيز التقرير...');
+
+            switch (subAction) {
+
+                case 'general': {
+
+                    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+
+                    const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
+
+                    const statsDoc = await db.collection('config').doc('stats').get();
+
+                    const { totalButtons = 0, totalMessages = 0, totalUsers = 0 } = statsDoc.data() || {};
+
+                    const statsMessage = `📊 <b>الإحصائيات العامة:</b>\n\n` + `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` + `🔘 الأزرار: <code>${totalButtons}</code>\n` + `✉️ الرسائل: <code>${totalMessages}</code>`;
+
+                    return ctx.editMessageText(statsMessage, { parse_mode: 'HTML' });
+
+                }
+
+                case 'top_today': {
+
+                    const report = await getTopButtons('today');
+
+                    return ctx.editMessageText(`🔥 *الأزرار الأكثر استخداماً اليوم:*\n\n${report}`, { parse_mode: 'Markdown' });
+
+                }
+
+                case 'top_weekly': {
+
+                    const report = await getTopButtons('weekly');
+
+                    return ctx.editMessageText(`📅 *الأزرار الأكثر استخداماً هذا الأسبوع:*\n\n${report}`, { parse_mode: 'Markdown' });
+
+                }
+
+                case 'top_all_time': {
+
+                    const report = await getTopButtons('all_time');
+
+                    return ctx.editMessageText(`🏆 *الأزرار الأكثر استخداماً (الكلي):*\n\n${report}`, { parse_mode: 'Markdown' });
+
+                }
+
+                case 'inactive_users': {
+
+                    const date = new Date();
+
+                    date.setDate(date.getDate() - 10);
+
+                    const cutoffDate = date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+
+
+
+                    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).get();
+
+                    
+
+                    if (inactiveSnapshot.empty) {
+
+                        return ctx.editMessageText('✅ لا يوجد مستخدمون غير نشطين حالياً.');
+
+                    }
+
+
+
+                    let report = `👥 *قائمة المستخدمين غير النشطين (آخر 10 أيام):*\n\n`;
+
+                    let count = 0;
+
+                    for (const doc of inactiveSnapshot.docs) {
+
+                        count++;
+
+                        const userId = doc.id;
+
+                        const userData = doc.data();
+
+                        let userName = `مستخدم ${userId}`;
+
+                        try {
+
+                            const chat = await bot.telegram.getChat(userId);
+
+                            userName = `${chat.first_name || ''} ${chat.last_name || ''}`.trim();
+
+                        } catch (e) {
+
+                            console.error(`Could not fetch chat for inactive user ${userId}`);
+
+                        }
+
+                        report += `${count}. <a href="tg://user?id=${userId}">${userName}</a> (<code>${userId}</code>)\n   - آخر نشاط: ${userData.lastActive}\n`;
+
+                    }
+
+                     return ctx.editMessageText(report, { parse_mode: 'HTML' });
+
+                }
+
+            }
+
+        }
         if (action === 'admin') {
            if (subAction === 'reply') {
                 await userRef.update({ state: 'AWAITING_ADMIN_REPLY', stateData: { targetUserId: targetId } });
