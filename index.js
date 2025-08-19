@@ -268,7 +268,7 @@ bot.start(async (ctx) => {
         const isAdmin = adminIds.includes(userId) || isSuperAdmin;
         if (!userDoc.exists) {
             await userRef.set({ chatId: ctx.chat.id, isAdmin, currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: today, banned: false });
-            const totalUsers = (await db.collection('users').get()).size;
+          await db.collection('config').doc('stats').set({ totalUsers: admin.firestore.FieldValue.increment(1) }, { merge: true });
             if (adminIds.length > 0) {
                 const user = ctx.from;
                 const userName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
@@ -682,33 +682,38 @@ const mainMessageHandler = async (ctx) => {
 
         if (currentPath === 'supervision' && isAdmin) {
              switch (text) {
-                case '📊 الإحصائيات': { // Using block scope for new variables
-                    const totalUsers = (await db.collection('users').get()).size;
+                case '📊 الإحصائيات': {
                     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
                     const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
                     
                     const statsRef = db.collection('config').doc('stats');
                     let statsDoc = await statsRef.get();
 
+                    // This block runs only once to set the initial stats
                     if (!statsDoc.exists || !statsDoc.data().initialized) {
                         const initMsg = await ctx.reply('⏳ جارٍ حساب الإحصائيات لأول مرة، قد يستغرق هذا بعض الوقت...');
                         
                         const allButtons = await db.collection('buttons').get();
                         const allMessages = await db.collection('messages').get();
+                        // Get the current number of users to initialize the counter
+                        const allUsers = await db.collection('users').get();
 
                         const initialStats = {
                             totalButtons: allButtons.size,
                             totalMessages: allMessages.size,
+                            totalUsers: allUsers.size, // Initialize the counter with the correct current value
                             initialized: true
                         };
                         
                         await statsRef.set(initialStats, { merge: true });
-                        statsDoc = await statsRef.get();
+                        statsDoc = await statsRef.get(); // Re-fetch the document with the new data
                         await ctx.telegram.deleteMessage(ctx.chat.id, initMsg.message_id).catch(() => {});
                     }
 
-                    const { totalButtons = 0, totalMessages = 0 } = statsDoc.data() || {};
+                    // Read all stats, including the new totalUsers counter
+                    const { totalButtons = 0, totalMessages = 0, totalUsers = 0 } = statsDoc.data() || {};
                     const statsMessage = `📊 <b>إحصائيات البوت:</b>\n\n` + `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` + `🔘 الأزرار: <code>${totalButtons}</code>\n` + `✉️ الرسائل: <code>${totalMessages}</code>`;
+                    
                     return ctx.replyWithHTML(statsMessage);
                 }
                 case '🗣️ رسالة جماعية':
