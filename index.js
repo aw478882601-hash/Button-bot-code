@@ -326,12 +326,24 @@ bot.start(async (ctx) => {
         if (!userDoc.exists) {
             await userRef.set({ chatId: ctx.chat.id, isAdmin, currentPath: 'root', state: 'NORMAL', stateData: {}, lastActive: today, banned: false });
           await db.collection('config').doc('stats').set({ totalUsers: admin.firestore.FieldValue.increment(1) }, { merge: true });
-            if (adminIds.length > 0) {
+          if (adminIds.length > 0) {
                 const user = ctx.from;
                 const userName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
                 const userLink = `tg://user?id=${user.id}`;
-                let notificationMessage = `👤 <b>مستخدم جديد انضم!</b>\n\n` + `<b>الاسم:</b> <a href="${userLink}">${userName}</a>\n` + `<b>المعرف:</b> ${user.username ? `@${user.username}` : 'لا يوجد'}\n` + `<b>ID:</b> <code>${user.id}</code>\n\n` + `👥 أصبح العدد الكلي للمستخدمين: <b>${totalUsers}</b>`;
-                for (const adminId of adminIds) {
+                
+                // Enhanced user data
+                const language = user.language_code || 'غير محدد';
+                const isPremium = user.is_premium ? 'نعم ✅' : 'لا ❌';
+
+                let notificationMessage = `👤 <b>مستخدم جديد انضم!</b>\n\n` +
+                                          `<b>الاسم:</b> <a href="${userLink}">${userName}</a>\n` +
+                                          `<b>المعرف:</b> ${user.username ? `@${user.username}` : 'لا يوجد'}\n` +
+                                          `<b>ID:</b> <code>${user.id}</code>\n` +
+                                          `<b>لغة التلجرام:</b> ${language}\n` +
+                                          `<b>حساب بريميوم:</b> ${isPremium}\n\n` +
+                                          `👥 أصبح العدد الكلي للمستخدمين: <b>${totalUsers}</b>`;
+
+                for (const adminId of adminIds)  {
                     try { await bot.telegram.sendMessage(adminId, notificationMessage, { parse_mode: 'HTML' }); }
                     catch (e) { console.error(`Failed to send new user notification to admin ${adminId}:`, e.message); }
                 }
@@ -756,29 +768,14 @@ const mainMessageHandler = async (ctx) => {
                     const topAllTime = await getTopButtons('all_time');
                     const topButtonsReport = `*🔥 الأكثر استخداماً (اليوم):*\n${topToday}\n\n` + `*📅 الأكثر استخداماً (أسبوع):*\n${topWeekly}\n\n` + `*🏆 الأكثر استخداماً (الكلي):*\n${topAllTime}`;
 
-                    // --- 3. المستخدمون غير النشطين ---
+                   // --- 3. المستخدمون غير النشطين ---
                     const date = new Date();
                     date.setDate(date.getDate() - 10);
                     const cutoffDate = date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-                    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).limit(20).get(); // Limit to 20 to avoid long messages
+                    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).get();
                     
-                    let inactiveUsersReport = '*👥 المستخدمون غير النشطين (آخر 10 أيام):*\n';
-                    if (inactiveSnapshot.empty) {
-                        inactiveUsersReport += '✅ لا يوجد مستخدمون غير نشطين حالياً.';
-                    } else {
-                        let count = 0;
-                        for (const doc of inactiveSnapshot.docs) {
-                            count++;
-                            const userId = doc.id;
-                            const userData = doc.data();
-                            let userName = `مستخدم ${userId}`;
-                            try {
-                                const chat = await bot.telegram.getChat(userId);
-                                userName = `${chat.first_name || ''} ${chat.last_name || ''}`.trim().replace(/([_*\[\]()~`>#+-=|{}.!])/g, '\\$1'); // Escape Markdown
-                            } catch (e) {/* User might have blocked the bot */}
-                            inactiveUsersReport += `${count}. [${userName}](tg://user?id=${userId}) (آخر نشاط: ${userData.lastActive})\n`;
-                        }
-                    }
+                    const inactiveCount = inactiveSnapshot.size;
+                    const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;
 
                     // --- تجميع كل التقارير في رسالة واحدة ---
                     const finalReport = `${generalStats}\n\n---\n\n${topButtonsReport}\n\n---\n\n${inactiveUsersReport}`;
