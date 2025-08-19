@@ -740,14 +740,53 @@ const mainMessageHandler = async (ctx) => {
         if (currentPath === 'supervision' && isAdmin) {
              switch (text) {
                 case '📊 الإحصائيات': {
-                    const statsKeyboard = Markup.inlineKeyboard([
-                        [Markup.button.callback('📊 الإحصائيات العامة', 'stats:general')],
-                        [Markup.button.callback('🔥 الأكثر استخداماً (اليوم)', 'stats:top_today')],
-                        [Markup.button.callback('📅 الأكثر استخداماً (أسبوع)', 'stats:top_weekly')],
-                        [Markup.button.callback('🏆 الأكثر استخداماً (الكلي)', 'stats:top_all_time')],
-                        [Markup.button.callback('👥 المستخدمون غير النشطين', 'stats:inactive_users')]
-                    ]);
-                    return ctx.reply('اختر نوع التقرير الذي تريد عرضه:', statsKeyboard);
+                    // إرسال رسالة مؤقتة لإعلام المستخدم بالانتظار
+                    const waitingMessage = await ctx.reply('⏳ جارٍ تجميع كافة الإحصائيات والتقارير المتقدمة، يرجى الانتظار...');
+
+                    // --- 1. الإحصائيات العامة ---
+                    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+                    const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
+                    const statsDoc = await db.collection('config').doc('stats').get();
+                    const { totalButtons = 0, totalMessages = 0, totalUsers = 0 } = statsDoc.data() || {};
+                    const generalStats = `*📊 الإحصائيات العامة:*\n\n` + `👤 المستخدمون: \`${totalUsers}\` (نشط اليوم: \`${dailyActiveUsers}\`)\n` + `🔘 الأزرار: \`${totalButtons}\`\n` + `✉️ الرسائل: \`${totalMessages}\``;
+
+                    // --- 2. الأزرار الأكثر استخداماً ---
+                    const topToday = await getTopButtons('today');
+                    const topWeekly = await getTopButtons('weekly');
+                    const topAllTime = await getTopButtons('all_time');
+                    const topButtonsReport = `*🔥 الأكثر استخداماً (اليوم):*\n${topToday}\n\n` + `*📅 الأكثر استخداماً (أسبوع):*\n${topWeekly}\n\n` + `*🏆 الأكثر استخداماً (الكلي):*\n${topAllTime}`;
+
+                    // --- 3. المستخدمون غير النشطين ---
+                    const date = new Date();
+                    date.setDate(date.getDate() - 10);
+                    const cutoffDate = date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+                    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).limit(20).get(); // Limit to 20 to avoid long messages
+                    
+                    let inactiveUsersReport = '*👥 المستخدمون غير النشطين (آخر 10 أيام):*\n';
+                    if (inactiveSnapshot.empty) {
+                        inactiveUsersReport += '✅ لا يوجد مستخدمون غير نشطين حالياً.';
+                    } else {
+                        let count = 0;
+                        for (const doc of inactiveSnapshot.docs) {
+                            count++;
+                            const userId = doc.id;
+                            const userData = doc.data();
+                            let userName = `مستخدم ${userId}`;
+                            try {
+                                const chat = await bot.telegram.getChat(userId);
+                                userName = `${chat.first_name || ''} ${chat.last_name || ''}`.trim().replace(/([_*\[\]()~`>#+-=|{}.!])/g, '\\$1'); // Escape Markdown
+                            } catch (e) {/* User might have blocked the bot */}
+                            inactiveUsersReport += `${count}. [${userName}](tg://user?id=${userId}) (آخر نشاط: ${userData.lastActive})\n`;
+                        }
+                    }
+
+                    // --- تجميع كل التقارير في رسالة واحدة ---
+                    const finalReport = `${generalStats}\n\n---\n\n${topButtonsReport}\n\n---\n\n${inactiveUsersReport}`;
+
+                    // تعديل الرسالة المؤقتة لعرض التقرير النهائي
+                    await ctx.telegram.editMessageText(ctx.chat.id, waitingMessage.message_id, undefined, finalReport, { parse_mode: 'Markdown' });
+                    
+                    return; // Return to prevent any other replies
                 }
                 case '🗣️ رسالة جماعية':
                     await userRef.update({ state: 'AWAITING_BROADCAST' });
@@ -881,111 +920,6 @@ bot.on('callback_query', async (ctx) => {
         }
         if (!userDoc.data().isAdmin) return ctx.answerCbQuery('غير مصرح لك.', { show_alert: true });
         const { currentPath } = userDoc.data();
-      if (action === 'stats') {
-
-            await ctx.answerCbQuery('⏳ جارٍ تجهيز التقرير...');
-
-            switch (subAction) {
-
-                case 'general': {
-
-                    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-
-                    const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
-
-                    const statsDoc = await db.collection('config').doc('stats').get();
-
-                    const { totalButtons = 0, totalMessages = 0, totalUsers = 0 } = statsDoc.data() || {};
-
-                    const statsMessage = `📊 <b>الإحصائيات العامة:</b>\n\n` + `👤 المستخدمون: <code>${totalUsers}</code> (نشط اليوم: <code>${dailyActiveUsers}</code>)\n` + `🔘 الأزرار: <code>${totalButtons}</code>\n` + `✉️ الرسائل: <code>${totalMessages}</code>`;
-
-                    return ctx.editMessageText(statsMessage, { parse_mode: 'HTML' });
-
-                }
-
-                case 'top_today': {
-
-                    const report = await getTopButtons('today');
-
-                    return ctx.editMessageText(`🔥 *الأزرار الأكثر استخداماً اليوم:*\n\n${report}`, { parse_mode: 'Markdown' });
-
-                }
-
-                case 'top_weekly': {
-
-                    const report = await getTopButtons('weekly');
-
-                    return ctx.editMessageText(`📅 *الأزرار الأكثر استخداماً هذا الأسبوع:*\n\n${report}`, { parse_mode: 'Markdown' });
-
-                }
-
-                case 'top_all_time': {
-
-                    const report = await getTopButtons('all_time');
-
-                    return ctx.editMessageText(`🏆 *الأزرار الأكثر استخداماً (الكلي):*\n\n${report}`, { parse_mode: 'Markdown' });
-
-                }
-
-                case 'inactive_users': {
-
-                    const date = new Date();
-
-                    date.setDate(date.getDate() - 10);
-
-                    const cutoffDate = date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-
-
-
-                    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).get();
-
-                    
-
-                    if (inactiveSnapshot.empty) {
-
-                        return ctx.editMessageText('✅ لا يوجد مستخدمون غير نشطين حالياً.');
-
-                    }
-
-
-
-                    let report = `👥 *قائمة المستخدمين غير النشطين (آخر 10 أيام):*\n\n`;
-
-                    let count = 0;
-
-                    for (const doc of inactiveSnapshot.docs) {
-
-                        count++;
-
-                        const userId = doc.id;
-
-                        const userData = doc.data();
-
-                        let userName = `مستخدم ${userId}`;
-
-                        try {
-
-                            const chat = await bot.telegram.getChat(userId);
-
-                            userName = `${chat.first_name || ''} ${chat.last_name || ''}`.trim();
-
-                        } catch (e) {
-
-                            console.error(`Could not fetch chat for inactive user ${userId}`);
-
-                        }
-
-                        report += `${count}. <a href="tg://user?id=${userId}">${userName}</a> (<code>${userId}</code>)\n   - آخر نشاط: ${userData.lastActive}\n`;
-
-                    }
-
-                     return ctx.editMessageText(report, { parse_mode: 'HTML' });
-
-                }
-
-            }
-
-        }
         if (action === 'admin') {
            if (subAction === 'reply') {
                 await userRef.update({ state: 'AWAITING_ADMIN_REPLY', stateData: { targetUserId: targetId } });
