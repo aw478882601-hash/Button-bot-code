@@ -112,6 +112,7 @@ async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = 'âœ
 
 // MODIFIED: This function now reads the nested `children` array to build the keyboard.
 // MODIFIED: This function now correctly handles the 'root' path.
+// MODIFIED: This function now correctly handles the 'root' path.
 async function generateKeyboard(userId) {
   try {
     const userDoc = await db.collection('users').doc(String(userId)).get();
