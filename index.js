@@ -815,13 +815,19 @@ const mainMessageHandler = async (ctx) => {
     const topAllTime = await getTopButtons('all_time');
     const topButtonsReport = `*🔥 الأكثر استخداماً (اليوم):*\n${topToday}\n\n` + `*📅 الأكثر استخداماً (أسبوع):*\n${topWeekly}\n\n` + `*🏆 الأكثر استخداماً (الكلي):*\n${topAllTime}`;
 
-    // --- 3. المستخدمون غير النشطين ---
-    const date = new Date();
-    date.setDate(date.getDate() - 10);
-    const cutoffDate = date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).get();
-    const inactiveCount = inactiveSnapshot.size;
-    const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;
+    // --- 3. المستخدمون غير النشطين --
+     // --- 3. المستخدمون غير النشطين (بتكلفة قراءة واحدة) ---
+const date = new Date();
+date.setDate(date.getDate() - 10);
+const cutoffDate = date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+
+// بناء الاستعلام بدون تنفيذه
+const inactiveQuery = db.collection('users').where('lastActive', '<', cutoffDate);
+// استخدام .count() للحصول على العدد بكفاءة
+const inactiveSnapshot = await inactiveQuery.count().get();
+const inactiveCount = inactiveSnapshot.data().count;
+
+const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;            
 
     // --- تجميع كل التقارير وإرسالها في رسالة واحدة ---
     const finalReport = `${generalStats}\n\n---\n\n${topButtonsReport}\n\n---\n\n${inactiveUsersReport}`;
