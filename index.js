@@ -183,29 +183,31 @@ async function generateKeyboard(userId) {
         const parentButtonDoc = await db.collection('buttons_v2').doc(currentPath).get();
         if (parentButtonDoc.exists) {
             const parentData = parentButtonDoc.data();
-            buttonsToShow = parentData.children || [];
+            const childrenInfo = parentData.children || [];
+            if (childrenInfo.length > 0) {
+                 const childrenIds = childrenInfo.map(c => c.id);
+                 const childrenSnapshot = await db.collection('buttons_v2').where(admin.firestore.FieldPath.documentId(), 'in', childrenIds).get();
+                 const childrenData = {};
+                 childrenSnapshot.forEach(doc => {
+                     childrenData[doc.id] = doc.data();
+                 });
+                 buttonsToShow = childrenInfo.map(c => {
+                     const fullData = childrenData[c.id];
+                     return fullData ? { ...c, ...fullData } : null;
+                 }).filter(Boolean);
+            }
         }
-    }
-    
-    let allButtonsData = {};
-    if (currentPath !== 'root' && buttonsToShow.length > 0) {
-        const childrenIds = buttonsToShow.map(c => c.id);
-        const childrenSnapshot = await db.collection('buttons_v2').where(admin.firestore.FieldPath.documentId(), 'in', childrenIds).get();
-        childrenSnapshot.forEach(doc => {
-            allButtonsData[doc.id] = doc.data();
-        });
     }
 
     let currentRow = [];
     buttonsToShow.sort((a,b) => (a.order || 0) - (b.order || 0)).forEach(buttonInfo => {
-      const fullButtonData = allButtonsData[buttonInfo.id] || buttonInfo;
-      if (!fullButtonData.adminOnly || isAdmin) {
-        if (fullButtonData.isFullWidth) {
+      if (!buttonInfo.adminOnly || isAdmin) {
+        if (buttonInfo.isFullWidth) {
             if (currentRow.length > 0) keyboardRows.push(currentRow);
-            keyboardRows.push([fullButtonData.text]);
+            keyboardRows.push([buttonInfo.text]);
             currentRow = [];
         } else {
-            currentRow.push(fullButtonData.text);
+            currentRow.push(buttonInfo.text);
             if (currentRow.length === 2) {
                 keyboardRows.push(currentRow);
                 currentRow = [];
@@ -292,7 +294,9 @@ async function recursiveDeleteButton(buttonId) {
     const buttonData = buttonDoc.data();
 
     if (buttonData.hasChildren) {
-        for (const child of buttonData.children) {
+        // Create a copy of the children array before iterating
+        const childrenToDelete = [...buttonData.children];
+        for (const child of childrenToDelete) {
             await recursiveDeleteButton(child.id);
         }
     }
@@ -314,11 +318,13 @@ async function recursiveDeleteButton(buttonId) {
             const parentData = parentDoc.data();
             const childToRemove = parentData.children.find(c => c.id === buttonId);
             if (childToRemove) {
-                const newChildren = parentData.children.filter(child => child.id !== buttonId);
-                await parentRef.update({ 
-                    children: newChildren,
-                    hasChildren: newChildren.length > 0
-                });
+                 await parentRef.update({ 
+                    children: FieldValue.arrayRemove(childToRemove),
+                 });
+                 // Update hasChildren after removal
+                 const updatedParent = await parentRef.get();
+                 const hasChildren = (updatedParent.data().children || []).length > 0;
+                 await parentRef.update({ hasChildren });
             }
         }
     }
@@ -332,7 +338,6 @@ async function clearAdminView(ctx, userId) {
     }
     await trackSentMessages(userId, []);
 }
-
 // =================================================================
 // |                       Bot Commands & Logic                      |
 // =================================================================
@@ -370,17 +375,24 @@ const mainMessageHandler = async (ctx) => {
         await userRef.update({ lastActive: new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }) });
 
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
+            // All admin states are handled here to keep the main logic clean
             
             if (state === 'AWAITING_NEW_MESSAGE') {
                 const { buttonId } = stateData;
-                if (!buttonId) return ctx.reply("⚠️ حدث خطأ.");
+                if (!buttonId) {
+                    await userRef.update({ state: 'NORMAL', stateData: {} });
+                    return ctx.reply("⚠️ حدث خطأ، لم يتم العثور على الزر.");
+                }
 
                 let newMessage = {};
                 const order = Date.now();
                 if (ctx.message.text) { newMessage = { type: "text", content: ctx.message.text, order, entities: ctx.message.entities || [] }; }
                 else if (ctx.message.photo) { newMessage = { type: "photo", content: ctx.message.photo.pop().file_id, caption: ctx.message.caption || '', order, entities: ctx.message.caption_entities || [] }; }
                 else if (ctx.message.video) { newMessage = { type: "video", content: ctx.message.video.file_id, caption: ctx.message.caption || '', order, entities: ctx.message.caption_entities || [] }; }
-                else { return ctx.reply("⚠️ نوع الرسالة غير مدعوم."); }
+                else {
+                    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+                    return ctx.reply("⚠️ نوع الرسالة غير مدعوم.");
+                }
 
                 const buttonRef = db.collection('buttons_v2').doc(buttonId);
                 await buttonRef.update({ messages: FieldValue.arrayUnion(newMessage), hasMessages: true });
@@ -407,8 +419,10 @@ const mainMessageHandler = async (ctx) => {
                     rootSnapshot.forEach(doc => parentChildren.push({text: doc.data().text}));
                 }
 
-                if (parentChildren.some(c => c.text === newButtonName)) return ctx.reply(`⚠️ يوجد زر بهذا الاسم بالفعل.`);
-
+                if (parentChildren.some(c => c.text === newButtonName)) {
+                    await userRef.update({ state: 'EDITING_BUTTONS' });
+                    return ctx.reply(`⚠️ يوجد زر بهذا الاسم بالفعل.`);
+                }
                 const newOrder = parentChildren.length;
                 const newButtonData = {
                     text: newButtonName, parentId: currentPath, order: newOrder,
@@ -429,6 +443,7 @@ const mainMessageHandler = async (ctx) => {
                 await userRef.update({ state: 'EDITING_BUTTONS' });
                 return ctx.reply(`✅ تم إضافة الزر بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
             }
+            return; // Exit here if an admin state was handled
         }
         
         if (!ctx.message || !ctx.message.text) return;
@@ -437,11 +452,14 @@ const mainMessageHandler = async (ctx) => {
         // --- Logic for command-like text buttons ---
         switch (text) {
             case '🔝 القائمة الرئيسية':
-                await userRef.update({ currentPath: 'root', stateData: {}, state: 'NORMAL' });
+                await userRef.update({ currentPath: 'root', state: 'NORMAL', stateData: {} });
+                await clearAdminView(ctx, userId);
                 return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '🔙 رجوع':
-                const parentId = currentPath === 'root' ? 'root' : (await db.collection('buttons_v2').doc(currentPath).get()).data().parentId;
-                await userRef.update({ currentPath: parentId || 'root', stateData: {} });
+                if (currentPath === 'root') return;
+                const parentId = (await db.collection('buttons_v2').doc(currentPath).get()).data().parentId;
+                await userRef.update({ currentPath: parentId || 'root', state: 'NORMAL', stateData: {} });
+                await clearAdminView(ctx, userId);
                 return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '👑 الإشراف':
                 if (isAdmin && currentPath === 'root') {
@@ -506,9 +524,14 @@ const mainMessageHandler = async (ctx) => {
         await updateButtonStats(buttonId, userId);
 
         if (state === 'EDITING_BUTTONS' && isAdmin) {
-            await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
-            const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`) ]];
-            return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
+            if (stateData && stateData.lastClickedButtonId === buttonId) {
+                await userRef.update({ currentPath: buttonId, stateData: {} });
+                return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            } else {
+                await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
+                const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`) ]];
+                return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
+            }
         }
 
         await clearAdminView(ctx, userId);
@@ -537,7 +560,6 @@ const mainMessageHandler = async (ctx) => {
 };
 
 bot.on('message', mainMessageHandler);
-
 bot.on('callback_query', async (ctx) => {
     try {
         const userId = String(ctx.from.id);
@@ -548,7 +570,9 @@ bot.on('callback_query', async (ctx) => {
         if (!userDoc.exists || !userDoc.data().isAdmin) {
             return ctx.answerCbQuery('غير مصرح لك.', { show_alert: true });
         }
+        const { currentPath } = userDoc.data();
 
+        // Logic for message manipulation
         if (action === 'msg') {
             const [buttonId, msgIndexStr] = targetId.split('_');
             const msgIndex = parseInt(msgIndexStr, 10);
@@ -557,9 +581,10 @@ bot.on('callback_query', async (ctx) => {
             const doc = await buttonRef.get();
             if (!doc.exists) return ctx.answerCbQuery('الزر الأصلي غير موجود.');
             
-            let buttonData = doc.data();
-            let messages = buttonData.messages || [];
+            let messages = doc.data().messages || [];
             messages.sort((a,b)=>(a.order || 0) - (b.order || 0));
+
+            let needsRefresh = false;
 
             if (subAction === 'delete') {
                 const deletedMessage = messages.splice(msgIndex, 1);
@@ -567,26 +592,38 @@ bot.on('callback_query', async (ctx) => {
                     await buttonRef.update({ messages: messages, hasMessages: messages.length > 0 });
                     await db.collection('config').doc('stats').update({ totalMessages: FieldValue.increment(-1) });
                     await ctx.answerCbQuery('✅ تم الحذف');
+                    needsRefresh = true;
                 } else {
                      await ctx.answerCbQuery('⚠️ لم يتم العثور على الرسالة');
                 }
             } else if (subAction === 'up' && msgIndex > 0) {
                 [messages[msgIndex], messages[msgIndex - 1]] = [messages[msgIndex - 1], messages[msgIndex]];
-                await buttonRef.update({ messages });
+                await buttonRef.update({ messages: messages.map((m, i) => ({...m, order: i})) });
                 await ctx.answerCbQuery('✅ تم الرفع');
+                needsRefresh = true;
             } else if (subAction === 'down' && msgIndex < messages.length - 1) {
                 [messages[msgIndex], messages[msgIndex + 1]] = [messages[msgIndex + 1], messages[msgIndex]];
-                await buttonRef.update({ messages });
+                await buttonRef.update({ messages: messages.map((m, i) => ({...m, order: i})) });
                 await ctx.answerCbQuery('✅ تم الخفض');
-            } else {
+                needsRefresh = true;
+            } else if (['edit', 'edit_caption', 'replace_file', 'addnext'].includes(subAction)) {
+                // Here you would set the user state to handle the next message
+                // This logic needs to be fully implemented based on your needs
+                await ctx.answerCbQuery(`⚠️ وظيفة "${subAction}" لم يتم تنفيذها بعد في هذا الإصدار.`);
+            }
+             else {
                  await ctx.answerCbQuery('⚠️ لا يمكن تنفيذ الحركة');
                  return;
             }
             
-            await clearAdminView(ctx, userId);
-            const updatedButton = { id: doc.id, ...doc.data(), messages };
-            await sendButtonMessages(ctx, updatedButton, true);
-            return ctx.reply('تم تحديث العرض.');
+            if (needsRefresh) {
+                await clearAdminView(ctx, userId);
+                const buttonDoc = await buttonRef.get(); // Re-fetch to get the most updated state
+                const updatedButton = { id: buttonDoc.id, ...buttonDoc.data()};
+                await sendButtonMessages(ctx, updatedButton, true);
+                return ctx.reply('تم تحديث العرض.');
+            }
+            return;
         }
 
         if (action === 'btn' && subAction === 'delete') {
@@ -607,6 +644,11 @@ bot.on('callback_query', async (ctx) => {
              await ctx.deleteMessage().catch(()=>{});
              await ctx.reply('🗑️ تم الحذف بنجاح.', Markup.keyboard(await generateKeyboard(userId)).resize());
              return ctx.answerCbQuery('✅ تم الحذف');
+        }
+
+        if (action === 'confirm_delete_button' && subAction === 'no') {
+            await ctx.editMessageText('👍 تم إلغاء عملية الحذف.');
+            return ctx.answerCbQuery();
         }
         
     } catch (error) {
