@@ -36,7 +36,7 @@ async function getTopButtons(period) {
 
     // تحديد كيفية الاستعلام بناءً على الفترة
     if (period === 'today') {
-        const todayStr = new Date().toLocaleString('en-CA', { timeZone: 'Africa/Cairo' });
+        const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
         query = statsCollection.where(`daily.${todayStr}.clicks`, '>', 0)
                                .orderBy(`daily.${todayStr}.clicks`, 'desc');
     } else if (period === 'all_time') {
@@ -94,7 +94,7 @@ async function getTopButtons(period) {
         let users = 0;
         
         if (period === 'today') {
-            const todayStr = new Date().toLocaleString('en-CA', { timeZone: 'Africa/Cairo' });
+            const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
             clicks = data.daily[todayStr]?.clicks || 0;
             users = data.daily[todayStr]?.uniqueUsers || 0;
         } else { // all_time
@@ -247,7 +247,7 @@ async function clearAndResendMessages(ctx, userId, buttonId) {
     await sendButtonMessages(ctx, buttonId, true);
 }
 async function updateButtonStats(buttonId, userId, buttonText) {
-    const today = new Date().toLocaleString('en-CA', { timeZone: 'Africa/Cairo' });
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
     const statsRef = db.collection('button_stats').doc(buttonId);
     const userLogRef = db.collection('button_user_log').doc(`${buttonId}_${today}`);
 
