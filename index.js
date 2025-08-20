@@ -26,18 +26,35 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 // |                         Helper Functions (دوال مساعدة)                      |
 // =================================================================
 
+// NEW: دالة لتحويل نص ID الزر إلى رقم ثابت لاستخدامه في التوزيع
+function simpleHash(text) {
+    let hash = 0;
+    if (!text || text.length === 0) return 0;
+    for (let i = 0; i < text.length; i++) {
+        hash += text.charCodeAt(i);
+    }
+    return hash;
+}
+
+// NEW: دالة لتحديد اسم مستند الإحصائيات (الشارد) الصحيح لأي زر
+function getShardDocRef(buttonId) {
+    const shardIndex = simpleHash(String(buttonId)) % 7; // نقسم على 7 مستندات
+    return db.collection('statistics').doc(`button_stats_shard_${shardIndex}`);
+}
+
+
 async function trackSentMessages(userId, messageIds) {
     const userRef = db.collection('users').doc(String(userId));
     await userRef.update({ 'stateData.messageViewIds': messageIds });
 }
-async function getTopButtons(period) {
-    const allButtonsSnapshot = await db.collection('buttons').get();
+
+// MODIFIED: تم تعديل الدالة بالكامل لتقبل البيانات كمتغير بدلاً من قراءتها من قاعدة البيانات
+function processAndFormatTopButtons(allStats, period) {
     let buttonStats = [];
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
 
-    for (const doc of allButtonsSnapshot.docs) {
-        const button = doc.data();
-        const stats = button.stats || {};
+    for (const buttonId in allStats) {
+        const stats = allStats[buttonId];
         let clicks = 0;
         let users = 0;
 
@@ -65,28 +82,25 @@ async function getTopButtons(period) {
 
         if (clicks > 0) {
             buttonStats.push({
-                name: button.text,
+                name: stats.name, // نقرأ الاسم من سجل الإحصائيات مباشرة
                 clicks: clicks,
                 users: users
             });
         }
     }
 
-    // Sort by clicks descending
     buttonStats.sort((a, b) => b.clicks - a.clicks);
-
     const top10 = buttonStats.slice(0, 10);
 
     if (top10.length === 0) {
         return 'لا توجد بيانات لعرضها في هذه الفترة.';
     }
 
-    let report = top10.map((btn, index) => 
+    return top10.map((btn, index) =>
         `${index + 1}. *${btn.name}*\n   - 🖱️ الضغطات: \`${btn.clicks}\`\n   - 👤 المستخدمون: \`${btn.users}\``
     ).join('\n\n');
-
-    return report;
 }
+
 
 async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '✅ تم تحديث العرض.') {
     const userDoc = await db.collection('users').doc(String(userId)).get();
@@ -161,7 +175,7 @@ async function generateKeyboard(userId) {
     }
     keyboardRows.push(finalRow);
 
-    return keyboardRows; // This should be the last line inside the 'try' block
+    return keyboardRows;
 } catch (error) {
     console.error('Error generating keyboard:', error);
     return [['حدث خطأ في عرض الأزرار']];
@@ -227,28 +241,55 @@ async function clearAndResendMessages(ctx, userId, buttonId) {
     await sendButtonMessages(ctx, buttonId, true);
 }
 
+// MODIFIED: تم تعديل الدالة بالكامل لتكتب في مستندات الإحصائيات المقسمة
 async function updateButtonStats(buttonId, userId) {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-    const buttonRef = db.collection('buttons').doc(buttonId);
+    const statDocRef = getShardDocRef(buttonId); // تحديد الشارد الصحيح
+    const buttonIdStr = String(buttonId);
+    const userIdStr = String(userId);
+
     try {
         await db.runTransaction(async (transaction) => {
-            const buttonDoc = await transaction.get(buttonRef);
-            if (!buttonDoc.exists) return;
-            let stats = buttonDoc.data().stats || {};
-            let totalUsers = stats.totalUsers || [];
-            if (!totalUsers.includes(userId)) totalUsers.push(userId);
-            let dailyUsers = stats.dailyUsers || {};
-            dailyUsers[today] = dailyUsers[today] || [];
-            if (!dailyUsers[today].includes(userId)) dailyUsers[today].push(userId);
-            transaction.update(buttonRef, {
-                'stats.totalClicks': admin.firestore.FieldValue.increment(1),
-                [`stats.dailyClicks.${today}`]: admin.firestore.FieldValue.increment(1),
-                'stats.totalUsers': totalUsers, 'stats.dailyUsers': dailyUsers
+            const statDoc = await transaction.get(statDocRef);
+            
+            // إذا لم يكن مستند الشارد موجودًا، قم بإنشائه
+            if (!statDoc.exists) {
+                transaction.set(statDocRef, { statsMap: {} });
+            }
+
+            const statsMap = statDoc.data()?.statsMap || {};
+            const buttonStats = statsMap[buttonIdStr] || {};
+
+            // تحديث الضغطات
+            const newTotalClicks = (buttonStats.totalClicks || 0) + 1;
+            const newDailyClicks = {
+                ...(buttonStats.dailyClicks || {}),
+                [today]: (buttonStats.dailyClicks?.[today] || 0) + 1
+            };
+
+            // تحديث المستخدمين الفريدين
+            const totalUsers = new Set(buttonStats.totalUsers || []);
+            totalUsers.add(userIdStr);
+            const dailyUsers = buttonStats.dailyUsers || {};
+            const todayUsers = new Set(dailyUsers[today] || []);
+            todayUsers.add(userIdStr);
+            const newDailyUsers = { ...dailyUsers, [today]: Array.from(todayUsers) };
+            
+            // تحديث البيانات داخل الخريطة الكبيرة
+            transaction.update(statDocRef, {
+                [`statsMap.${buttonIdStr}.totalClicks`]: newTotalClicks,
+                [`statsMap.${buttonIdStr}.dailyClicks`]: newDailyClicks,
+                [`statsMap.${buttonIdStr}.totalUsers`]: Array.from(totalUsers),
+                [`statsMap.${buttonIdStr}.dailyUsers`]: newDailyUsers,
             });
         });
-    } catch (e) { console.error(`Button stats transaction failed for button ${buttonId}:`, e); }
+    } catch (e) {
+        console.error(`Button stats transaction failed for button ${buttonId}:`, e);
+    }
 }
 
+
+// MODIFIED: تم تعديل الدالة لتشمل حذف سجل الإحصائيات
 async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, messages: 0 }) {
     const subButtons = await db.collection('buttons').where('parentId', '==', buttonPath).get();
     for (const sub of subButtons.docs) {
@@ -257,9 +298,19 @@ async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, mes
     }
     const buttonId = buttonPath.split('/').pop();
     const messages = await db.collection('messages').where('buttonId', '==', buttonId).get();
+    
+    // NEW: تحديد الشارد وحذف سجل الإحصائيات
+    const statDocRef = getShardDocRef(buttonId);
+
     const batch = db.batch();
     messages.forEach(doc => batch.delete(doc.ref));
     batch.delete(db.collection('buttons').doc(buttonId));
+    
+    // NEW: إضافة عملية الحذف من الخريطة إلى الباتش
+    batch.update(statDocRef, {
+        [`statsMap.${buttonId}`]: admin.firestore.FieldValue.delete()
+    });
+
     await batch.commit();
 
     statsUpdate.buttons++;
@@ -267,6 +318,7 @@ async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, mes
 
     return statsUpdate;
 }
+
 async function moveBranch(sourceButtonId, newParentPath) {
     try {
         const sourceButtonRef = db.collection('buttons').doc(sourceButtonId);
@@ -274,19 +326,23 @@ async function moveBranch(sourceButtonId, newParentPath) {
         if (!sourceButtonDoc.exists) throw new Error("Source button not found.");
 
         const sourceData = sourceButtonDoc.data();
+        
+        // NEW: تحديث اسم الزر في سجل الإحصائيات إذا تم نقله
+        const statDocRef = getShardDocRef(sourceButtonId);
+        await statDocRef.update({
+            [`statsMap.${sourceButtonId}.name`]: sourceData.text
+        }).catch(err => console.log("Note: Could not update button name in stats during move, entry might not exist yet.", err.message));
+
+
         const oldPath = `${sourceData.parentId}/${sourceButtonId}`;
         const newPath = `${newParentPath}/${sourceButtonId}`;
 
-        // حساب الترتيب الجديد للزر المنقول ليكون آخر زر في وجهته
         const siblingsSnapshot = await db.collection('buttons').where('parentId', '==', newParentPath).orderBy('order', 'desc').limit(1).get();
         const newOrder = siblingsSnapshot.empty ? 0 : siblingsSnapshot.docs[0].data().order + 1;
 
         const batch = db.batch();
-        
-        // 1. تحديث الزر الرئيسي وتغيير مساره وترتيبه
         batch.update(sourceButtonRef, { parentId: newParentPath, order: newOrder });
 
-        // 2. دالة متتابعة للبحث عن كل الفروع وتحديث مسارها
         async function findAndMoveDescendants(currentOldPath, currentNewPath) {
             const snapshot = await db.collection('buttons').where('parentId', '==', currentOldPath).get();
             if (snapshot.empty) return;
@@ -297,14 +353,10 @@ async function moveBranch(sourceButtonId, newParentPath) {
             }
         }
 
-        // 3. بدء عملية تحديث الفروع
         await findAndMoveDescendants(oldPath, newPath);
-        
-        // 4. تنفيذ جميع التحديثات دفعة واحدة
         await batch.commit();
     } catch (error) {
         console.error(`[moveBranch Error] Failed to move button ${sourceButtonId} to ${newParentPath}:`, error);
-        // إعادة رمي الخطأ ليتم التقاطه في المكان الذي تم استدعاء الدالة فيه
         throw error;
     }
 }
@@ -328,7 +380,6 @@ bot.start(async (ctx) => {
           await db.collection('config').doc('stats').set({ totalUsers: admin.firestore.FieldValue.increment(1) }, { merge: true });
           
           if (adminIds.length > 0) {
-                // Read the new total number of users
                 const statsDoc = await db.collection('config').doc('stats').get();
                 const totalUsers = statsDoc.data()?.totalUsers || 1;
 
@@ -336,7 +387,6 @@ bot.start(async (ctx) => {
                 const userName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
                 const userLink = `tg://user?id=${user.id}`;
                 
-                // Enhanced user data
                 const language = user.language_code || 'غير محدد';
                 const isPremium = user.is_premium ? 'نعم ✅' : 'لا ❌';
 
@@ -373,7 +423,6 @@ const mainMessageHandler = async (ctx) => {
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await userRef.update({ lastActive: new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }) });
 
-        // --- Handle specific user states for receiving text/media input ---
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
             
             if (state === 'AWAITING_ADMIN_REPLY') {
@@ -489,7 +538,7 @@ const mainMessageHandler = async (ctx) => {
                 await userRef.update({ state: 'NORMAL' });
                 return;
             }
-
+            
             if (state === 'AWAITING_NEW_BUTTON_NAME') {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
                 const newButtonName = ctx.message.text;
@@ -500,7 +549,26 @@ const mainMessageHandler = async (ctx) => {
                 }
                 const lastButton = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
                 const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
-                await db.collection('buttons').add({ text: newButtonName, parentId: currentPath, order: newOrder, adminOnly: false, isFullWidth: true });
+                
+                // MODIFIED: تم تعديل منطق إضافة زر جديد ليشمل إنشاء سجل إحصائي
+                const newButtonRef = await db.collection('buttons').add({ text: newButtonName, parentId: currentPath, order: newOrder, adminOnly: false, isFullWidth: true });
+                const newButtonId = newButtonRef.id;
+
+                // NEW: إنشاء سجل إحصائي أولي للزر الجديد في الشارد الصحيح
+                const statDocRef = getShardDocRef(newButtonId);
+                await statDocRef.set({
+                    statsMap: {
+                        [newButtonId]: {
+                            name: newButtonName,
+                            totalClicks: 0,
+                            dailyClicks: {},
+                            totalUsers: [],
+                            dailyUsers: {}
+                        }
+                    }
+                }, { merge: true }); // Merge true to avoid overwriting the whole shard doc
+
+
                 await db.collection('config').doc('stats').set({ totalButtons: admin.firestore.FieldValue.increment(1) }, { merge: true });
                 await userRef.update({ state: 'EDITING_BUTTONS' });
                 await ctx.reply(`✅ تم إضافة الزر "${newButtonName}" بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
@@ -523,6 +591,13 @@ const mainMessageHandler = async (ctx) => {
                     return ctx.reply(`⚠️ يوجد زر آخر بهذا الاسم "${newButtonName}". تم إلغاء التعديل.`);
                 }
                 await db.collection('buttons').doc(buttonIdToRename).update({ text: newButtonName });
+                
+                // NEW: تحديث اسم الزر في سجل الإحصائيات
+                const statDocRef = getShardDocRef(buttonIdToRename);
+                await statDocRef.update({
+                    [`statsMap.${buttonIdToRename}.name`]: newButtonName
+                });
+
                 await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                 await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
@@ -640,10 +715,7 @@ const mainMessageHandler = async (ctx) => {
         const text = ctx.message.text;
 
         switch (text) {
-            // ... inside the switch (text) block of mainMessageHandler ...
-
             case '🔝 القائمة الرئيسية':
-                // If in a move operation, preserve stateData, otherwise clear it.
                 if (state === 'AWAITING_DESTINATION_PATH') {
                     await userRef.update({ currentPath: 'root' });
                 } else {
@@ -653,7 +725,6 @@ const mainMessageHandler = async (ctx) => {
 
             case '🔙 رجوع':
                 const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
-                // If in a move operation, preserve stateData, otherwise clear it.
                 if (state === 'AWAITING_DESTINATION_PATH') {
                     await userRef.update({ currentPath: newPath });
                 } else {
@@ -661,7 +732,6 @@ const mainMessageHandler = async (ctx) => {
                 }
                 return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
 
-// ... the rest of the switch statement ...
             case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
                 return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)...');
@@ -727,7 +797,6 @@ const mainMessageHandler = async (ctx) => {
                         }
                         const oldPath = `${sourceButtonDoc.data().parentId}/${sourceButtonId}`;
                         
-                        // منع نقل الزر إلى داخل نفسه أو فروعه أو مكانه الحالي
                         if (newParentPath.startsWith(oldPath) || newParentPath === sourceButtonDoc.data().parentId) {
                              await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                              const reason = newParentPath.startsWith(oldPath) ? "إلى داخل نفسه أو أحد فروعه" : "إلى نفس مكانه الحالي";
@@ -757,7 +826,6 @@ const mainMessageHandler = async (ctx) => {
         if (currentPath === 'supervision' && isAdmin) {
              switch (text) {
                 case '📊 الإحصائيات': {
-                    // إرسال رسالة مؤقتة لإعلام المستخدم بالانتظار
                     const waitingMessage = await ctx.reply('⏳ جارٍ تجميع كافة الإحصائيات والتقارير المتقدمة، يرجى الانتظار...');
 
                     // --- 1. الإحصائيات العامة ---
@@ -767,10 +835,23 @@ const mainMessageHandler = async (ctx) => {
                     const { totalButtons = 0, totalMessages = 0, totalUsers = 0 } = statsDoc.data() || {};
                     const generalStats = `*📊 الإحصائيات العامة:*\n\n` + `👤 المستخدمون: \`${totalUsers}\` (نشط اليوم: \`${dailyActiveUsers}\`)\n` + `🔘 الأزرار: \`${totalButtons}\`\n` + `✉️ الرسائل: \`${totalMessages}\``;
 
-                    // --- 2. الأزرار الأكثر استخداماً ---
-                    const topToday = await getTopButtons('today');
-                    const topWeekly = await getTopButtons('weekly');
-                    const topAllTime = await getTopButtons('all_time');
+                    // --- 2. الأزرار الأكثر استخداماً (MODIFIED) ---
+                    // NEW: قراءة كل الشاردات مرة واحدة وتجميع البيانات
+                    const shardRefs = Array.from({ length: 7 }, (_, i) => db.collection('statistics').doc(`button_stats_shard_${i}`));
+                    const shardDocs = await db.getAll(...shardRefs);
+                    let allButtonStats = {};
+                    shardDocs.forEach(doc => {
+                        if (doc.exists) {
+                            const statsMap = doc.data().statsMap || {};
+                            Object.assign(allButtonStats, statsMap);
+                        }
+                    });
+
+                    // NEW: معالجة البيانات التي تم تجميعها
+                    const topToday = processAndFormatTopButtons(allButtonStats, 'today');
+                    const topWeekly = processAndFormatTopButtons(allButtonStats, 'weekly');
+                    const topAllTime = processAndFormatTopButtons(allButtonStats, 'all_time');
+
                     const topButtonsReport = `*🔥 الأكثر استخداماً (اليوم):*\n${topToday}\n\n` + `*📅 الأكثر استخداماً (أسبوع):*\n${topWeekly}\n\n` + `*🏆 الأكثر استخداماً (الكلي):*\n${topAllTime}`;
 
                    // --- 3. المستخدمون غير النشطين ---
@@ -785,10 +866,9 @@ const mainMessageHandler = async (ctx) => {
                     // --- تجميع كل التقارير في رسالة واحدة ---
                     const finalReport = `${generalStats}\n\n---\n\n${topButtonsReport}\n\n---\n\n${inactiveUsersReport}`;
 
-                    // تعديل الرسالة المؤقتة لعرض التقرير النهائي
                     await ctx.telegram.editMessageText(ctx.chat.id, waitingMessage.message_id, undefined, finalReport, { parse_mode: 'Markdown' });
                     
-                    return; // Return to prevent any other replies
+                    return;
                 }
                 case '🗣️ رسالة جماعية':
                     await userRef.update({ state: 'AWAITING_BROADCAST' });
@@ -875,8 +955,6 @@ const mainMessageHandler = async (ctx) => {
 
         await updateButtonStats(buttonId, userId);
 
-        // --- START: NEW NAVIGATION LOGIC ---
-        // الشرط الرئيسي للدخول: إما وجود أزرار فرعية، أو أن الأدمن في وضع تعديل/نقل
         const canEnter = hasSubButtons || (isAdmin && ['EDITING_CONTENT', 'EDITING_BUTTONS', 'AWAITING_DESTINATION_PATH'].includes(state));
         
         if (canEnter) {
@@ -896,7 +974,6 @@ const mainMessageHandler = async (ctx) => {
         } else {
             return ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
-        // --- END: NEW NAVIGATION LOGIC ---
 
     } catch (error) {
         console.error("FATAL ERROR in mainMessageHandler:", error);
@@ -922,31 +999,31 @@ bot.on('callback_query', async (ctx) => {
         }
         if (!userDoc.data().isAdmin) return ctx.answerCbQuery('غير مصرح لك.', { show_alert: true });
         const { currentPath } = userDoc.data();
-      // --- Handler for Button Deletion Confirmation ---
-if (action === 'confirm_delete_button') {
-    if (subAction === 'no') {
-        await ctx.editMessageText('👍 تم إلغاء عملية الحذف.');
-        return ctx.answerCbQuery();
-    }
+      
+        if (action === 'confirm_delete_button') {
+            if (subAction === 'no') {
+                await ctx.editMessageText('👍 تم إلغاء عملية الحذف.');
+                return ctx.answerCbQuery();
+            }
 
-    if (subAction === 'yes') {
-        await ctx.editMessageText('⏳ جارٍ الحذف...');
-        const buttonToDeletePath = `${currentPath}/${targetId}`;
-        const deletedCounts = await recursiveDeleteButton(buttonToDeletePath);
+            if (subAction === 'yes') {
+                await ctx.editMessageText('⏳ جارٍ الحذف...');
+                const buttonToDeletePath = `${currentPath}/${targetId}`;
+                const deletedCounts = await recursiveDeleteButton(buttonToDeletePath);
 
-        if (deletedCounts.buttons > 0 || deletedCounts.messages > 0) {
-            const statsRef = db.collection('config').doc('stats');
-            await statsRef.set({
-                totalButtons: admin.firestore.FieldValue.increment(-deletedCounts.buttons),
-                totalMessages: admin.firestore.FieldValue.increment(-deletedCounts.messages)
-            }, { merge: true });
+                if (deletedCounts.buttons > 0 || deletedCounts.messages > 0) {
+                    const statsRef = db.collection('config').doc('stats');
+                    await statsRef.set({
+                        totalButtons: admin.firestore.FieldValue.increment(-deletedCounts.buttons),
+                        totalMessages: admin.firestore.FieldValue.increment(-deletedCounts.messages)
+                    }, { merge: true });
+                }
+
+                await ctx.deleteMessage().catch(()=>{});
+                await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                return ctx.answerCbQuery('✅ تم الحذف');
+            }
         }
-
-        await ctx.deleteMessage().catch(()=>{});
-        await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
-        return ctx.answerCbQuery('✅ تم الحذف');
-    }
-}
         if (action === 'admin') {
            if (subAction === 'reply') {
                 await userRef.update({ state: 'AWAITING_ADMIN_REPLY', stateData: { targetUserId: targetId } });
@@ -984,7 +1061,6 @@ if (action === 'confirm_delete_button') {
         if (action === 'btn') {
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 
-                // *** NEW "Split-First" Reordering Logic ***
                 const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
                 const buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
                 
@@ -1017,14 +1093,14 @@ if (action === 'confirm_delete_button') {
 
                 if (subAction === 'up') {
                     const isHalfWidth = rows[targetRowIndex].length > 1;
-                    if (isHalfWidth) { // إذا كان الزر مزدوجاً، قم بفصله دائماً أولاً
+                    if (isHalfWidth) { 
                         const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
                         const self = rows[targetRowIndex][targetColIndex];
                         rows.splice(targetRowIndex, 1, [self], [partner]);
                         actionTaken = true;
-                    } else if (targetRowIndex > 0) { // إذا كان الزر فردياً
+                    } else if (targetRowIndex > 0) {
                         const rowAbove = rows[targetRowIndex - 1];
-                        if (rowAbove.length === 1) { // وإذا كان الصف الذي فوقه فردياً أيضاً، ادمجهما
+                        if (rowAbove.length === 1) { 
                             const buttonAbove = rowAbove[0];
                             const self = rows[targetRowIndex][0];
                             rows[targetRowIndex - 1] = [buttonAbove, self];
@@ -1034,18 +1110,18 @@ if (action === 'confirm_delete_button') {
                     }
                 } else if (subAction === 'down') {
                     const isHalfWidth = rows[targetRowIndex].length > 1;
-                    if (isHalfWidth) { // إذا كان الزر مزدوجاً، قم بفصله دائماً أولاً
+                    if (isHalfWidth) { 
                         const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
                         const self = rows[targetRowIndex][targetColIndex];
                         rows.splice(targetRowIndex, 1, [partner], [self]);
                         actionTaken = true;
-                    } else if (targetRowIndex < rows.length - 1) { // إذا كان الزر فردياً
+                    } else if (targetRowIndex < rows.length - 1) {
                         const rowBelow = rows[targetRowIndex + 1];
-                        if (rowBelow.length === 1) { // وإذا كان الصف الذي تحته فردياً أيضاً، ادمجهما
+                        if (rowBelow.length === 1) { 
                             const buttonBelow = rowBelow[0];
                             const self = rows[targetRowIndex][0];
                             rows.splice(targetRowIndex, 1);
-                            rows[targetRowIndex] = [self, buttonBelow]; // Index shifts up after splice
+                            rows[targetRowIndex] = [self, buttonBelow];
                             actionTaken = true;
                         }
                     }
@@ -1085,16 +1161,16 @@ if (action === 'confirm_delete_button') {
                 return;
             }
            if (subAction === 'delete') {
-    const buttonDoc = await db.collection('buttons').doc(targetId).get();
-    if (!buttonDoc.exists) return ctx.answerCbQuery('الزر غير موجود بالفعل.');
+            const buttonDoc = await db.collection('buttons').doc(targetId).get();
+            if (!buttonDoc.exists) return ctx.answerCbQuery('الزر غير موجود بالفعل.');
 
-    const confirmationKeyboard = Markup.inlineKeyboard([
-        Markup.button.callback('✅ نعم، قم بالحذف', `confirm_delete_button:yes:${targetId}`),
-        Markup.button.callback('❌ إلغاء', `confirm_delete_button:no:${targetId}`)
-    ]);
-    await ctx.editMessageText(`🗑️ هل أنت متأكد من حذف الزر "${buttonDoc.data().text}" وكل ما بداخله؟ هذا الإجراء لا يمكن التراجع عنه.`, confirmationKeyboard);
-    return;
-}
+            const confirmationKeyboard = Markup.inlineKeyboard([
+                Markup.button.callback('✅ نعم، قم بالحذف', `confirm_delete_button:yes:${targetId}`),
+                Markup.button.callback('❌ إلغاء', `confirm_delete_button:no:${targetId}`)
+            ]);
+            await ctx.editMessageText(`🗑️ هل أنت متأكد من حذف الزر "${buttonDoc.data().text}" وكل ما بداخله؟ هذا الإجراء لا يمكن التراجع عنه.`, confirmationKeyboard);
+            return;
+        }
             if (subAction === 'adminonly') {
                 const buttonRef = db.collection('buttons').doc(targetId);
                 const buttonDoc = await buttonRef.get();
@@ -1104,15 +1180,21 @@ if (action === 'confirm_delete_button') {
                 return;
             }
             if (subAction === 'stats') {
-                const buttonDoc = await db.collection('buttons').doc(targetId).get();
-                if (!buttonDoc.exists) return ctx.answerCbQuery('الزر غير موجود.');
-                const stats = buttonDoc.data().stats || {};
+                // MODIFIED: قراءة إحصائيات الزر الواحد من الشارد الصحيح
+                const statDocRef = getShardDocRef(targetId);
+                const statDoc = await statDocRef.get();
+                
+                if (!statDoc.exists || !statDoc.data().statsMap?.[targetId]) {
+                    return ctx.answerCbQuery('لا توجد إحصائيات لهذا الزر بعد.');
+                }
+
+                const stats = statDoc.data().statsMap[targetId];
                 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
                 const totalClicks = stats.totalClicks || 0;
-                const dailyClicks = stats.dailyClicks ? (stats.dailyClicks[today] || 0) : 0;
-                const totalUsers = stats.totalUsers ? stats.totalUsers.length : 0;
-                const dailyUsers = stats.dailyUsers && stats.dailyUsers[today] ? stats.dailyUsers[today].length : 0;
-                const statsMessage = `📊 <b>إحصائيات الزر:</b>\n\n` + `👆 <b>الضغطات:</b>\n` + `  - اليوم: <code>${dailyClicks}</code>\n` + `  - الكلي: <code>${totalClicks}</code>\n\n` + `👤 <b>المستخدمون:</b>\n` + `  - اليوم: <code>${dailyUsers}</code>\n` + `  - الكلي: <code>${totalUsers}</code>`;
+                const dailyClicks = stats.dailyClicks?.[today] || 0;
+                const totalUsers = stats.totalUsers?.length || 0;
+                const dailyUsers = stats.dailyUsers?.[today]?.length || 0;
+                const statsMessage = `📊 <b>إحصائيات الزر: ${stats.name}</b>\n\n` + `👆 <b>الضغطات:</b>\n` + `  - اليوم: <code>${dailyClicks}</code>\n` + `  - الكلي: <code>${totalClicks}</code>\n\n` + `👤 <b>المستخدمون:</b>\n` + `  - اليوم: <code>${dailyUsers}</code>\n` + `  - الكلي: <code>${totalUsers}</code>`;
                 await ctx.answerCbQuery();
                 await ctx.replyWithHTML(statsMessage);
                 return;
