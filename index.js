@@ -111,6 +111,7 @@ async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '�
 }
 
 // MODIFIED: This function now reads the nested `children` array to build the keyboard.
+// MODIFIED: This function now correctly handles the 'root' path.
 async function generateKeyboard(userId) {
   try {
     const userDoc = await db.collection('users').doc(String(userId)).get();
@@ -193,10 +194,10 @@ async function generateKeyboard(userId) {
     keyboardRows.push(finalRow);
 
     return keyboardRows;
-} catch (error) {
+  } catch (error) {
     console.error('Error generating keyboard:', error);
     return [['حدث خطأ في عرض الأزرار']];
-}
+  }
 }
 
 // MODIFIED: This function now reads the nested `messages` array.
@@ -894,7 +895,7 @@ const mainMessageHandler = async (ctx) => {
                 }
                 break;
     // MODIFIED: Corrected logic for moving a button.
-case '✅ النقل إلى هنا':
+            case '✅ النقل إلى هنا':
     if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
         const { sourceButtonId, sourceButtonText } = stateData;
         const newParentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
