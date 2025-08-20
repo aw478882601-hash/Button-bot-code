@@ -252,7 +252,7 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     try {
         const cachedMessages = await redisClient.get(cacheKey);
         if (cachedMessages) {
-            const messages = JSON.parse(cachedMessages);
+            const messages = cachedMessages;
             for (const message of messages) {
                 const options = { caption: message.caption || '', entities: message.entities, parse_mode: (message.entities && message.entities.length > 0) ? undefined : 'HTML' };
                 try {
