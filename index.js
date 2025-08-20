@@ -6,7 +6,7 @@
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
 const { Telegraf, Markup } = require('telegraf');
 const admin = require('firebase-admin');
-const { createClient } = require('redis'); // <-- إضافة Redis
+const { Redis } = require("@upstash/redis");// <-- إضافة Redis
 
 // --- إعداد Redis ---
 const redisClient = createClient({
