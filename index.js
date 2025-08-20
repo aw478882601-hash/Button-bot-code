@@ -664,7 +664,7 @@ const mainMessageHandler = async (ctx) => {
 // ... the rest of the switch statement ...
             case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
-                return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)...');
+                return ctx.reply(' أرسل رسالتك الآن (نص، صورة، ملف...)... او يمكنك التواصل بشكل مباشر هنا @aw478260');
             case '👑 الإشراف':
                 if (isAdmin && currentPath === 'root') {
                     await userRef.update({ currentPath: 'supervision', stateData: {} });
