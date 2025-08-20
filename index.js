@@ -896,7 +896,7 @@ const mainMessageHandler = async (ctx) => {
                 }
                 break;
     // MODIFIED: Corrected logic for moving a button.
-         // MODIFIED: Corrected logic for moving a button.
+       // MODIFIED: Corrected logic for moving a button.
 case '✅ النقل إلى هنا':
     if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
         const { sourceButtonId, sourceButtonText } = stateData;
@@ -922,7 +922,6 @@ case '✅ النقل إلى هنا':
                  return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى داخل أحد فروعه.`, Markup.keyboard(await generateKeyboard(userId)).resize());
             }
             
-            // New Logic: Move the document by updating parentId
             await ctx.reply(`⏳ جاري نقل الزر [${sourceButtonText}] إلى القسم الحالي...`);
             
             const batch = db.batch();
