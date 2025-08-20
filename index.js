@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V53 - STABLE MOVE BUILD             |
+// |   TELEGRAM FIREBASE BOT - V54 - STABLE MOVE BUILD             |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -135,11 +135,11 @@ async function generateKeyboard(userId) {
 
     let buttonsToRender;
     if (currentPath === 'root') {
-        const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', 'root').orderBy('order').get();
+        const buttonsSnapshot = await db.collection('buttons_v2').where('parentId', '==', 'root').orderBy('order').get();
         buttonsToRender = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     } else {
         const currentButtonId = currentPath.split('/').pop();
-        const currentButtonDoc = await db.collection('buttons').doc(currentButtonId).get();
+        const currentButtonDoc = await db.collection('buttons_v2').doc(currentButtonId).get();
         if (!currentButtonDoc.exists || !currentButtonDoc.data().children) {
              buttonsToRender = [];
         } else {
@@ -201,7 +201,7 @@ async function generateKeyboard(userId) {
 
 // MODIFIED: This function now reads the nested `messages` array.
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
-    const buttonDoc = await db.collection('buttons').doc(buttonId).get();
+    const buttonDoc = await db.collection('buttons_v2').doc(buttonId).get();
     if (!buttonDoc.exists) {
         if (ctx.from) await trackSentMessages(String(ctx.from.id), []);
         return 0;
@@ -294,7 +294,7 @@ async function updateButtonStats(buttonId, userId) {
             
             let buttonNameToSave = buttonStats.name;
             if (!buttonNameToSave) {
-                const buttonRef = db.collection('buttons').doc(buttonIdStr);
+                const buttonRef = db.collection('buttons_v2').doc(buttonIdStr);
                 const buttonDoc = await transaction.get(buttonRef);
                 if (buttonDoc.exists) {
                     buttonNameToSave = buttonDoc.data().text;
@@ -332,7 +332,7 @@ async function updateButtonStats(buttonId, userId) {
 // MODIFIED: This function is simplified because deleting a button document now also deletes all its nested data.
 async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, messages: 0 }) {
     const buttonId = buttonPath.split('/').pop();
-    const buttonDoc = await db.collection('buttons').doc(buttonId).get();
+    const buttonDoc = await db.collection('buttons_v2').doc(buttonId).get();
     
     if (!buttonDoc.exists) return statsUpdate;
 
@@ -350,7 +350,7 @@ async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, mes
     batch.update(statDocRef, {
         [`statsMap.${buttonId}`]: admin.firestore.FieldValue.delete()
     });
-    batch.delete(db.collection('buttons').doc(buttonId));
+    batch.delete(db.collection('buttons_v2').doc(buttonId));
     await batch.commit();
 
     statsUpdate.buttons++;
@@ -360,7 +360,7 @@ async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, mes
 // MODIFIED: This function is simplified because moving a button is now a single-document operation.
 async function moveBranch(sourceButtonId, newParentPath) {
     try {
-        const sourceButtonRef = db.collection('buttons').doc(sourceButtonId);
+        const sourceButtonRef = db.collection('buttons_v2').doc(sourceButtonId);
         const sourceButtonDoc = await sourceButtonRef.get();
         if (!sourceButtonDoc.exists) throw new Error("Source button not found.");
 
@@ -476,7 +476,7 @@ const mainMessageHandler = async (ctx) => {
                     return ctx.reply("⚠️ حدث خطأ: لم يتم العثور على الزر. تم إلغاء العملية.");
                 }
 
-                const buttonRef = db.collection('buttons').doc(buttonId);
+                const buttonRef = db.collection('buttons_v2').doc(buttonId);
                 const buttonDoc = await buttonRef.get();
                 if (!buttonDoc.exists) {
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
@@ -598,11 +598,11 @@ const mainMessageHandler = async (ctx) => {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
                 const newButtonName = ctx.message.text;
                 
-                const lastButton = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
+                const lastButton = await db.collection('buttons_v2').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
                 const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
                 
                 // MODIFIED: تم تعديل منطق إضافة زر جديد ليشمل إنشاء سجل إحصائي
-                const newButtonRef = await db.collection('buttons').add({ text: newButtonName, parentId: currentPath, order: newOrder, adminOnly: false, isFullWidth: true, hasMessages: false, hasChildren: false, messages: [], children: [] });
+                const newButtonRef = await db.collection('buttons_v2').add({ text: newButtonName, parentId: currentPath, order: newOrder, adminOnly: false, isFullWidth: true, hasMessages: false, hasChildren: false, messages: [], children: [] });
                 const newButtonId = newButtonRef.id;
 
                 // NEW: إنشاء سجل إحصائي أولي للزر الجديد في الشارد الصحيح
@@ -634,14 +634,14 @@ const mainMessageHandler = async (ctx) => {
                      await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                      return ctx.reply('حدث خطأ، لم يتم العثور على الزر المراد تعديله.');
                 }
-                const buttonDoc = await db.collection('buttons').doc(buttonIdToRename).get();
+                const buttonDoc = await db.collection('buttons_v2').doc(buttonIdToRename).get();
                 const parentId = buttonDoc.data().parentId;
-                const existingButton = await db.collection('buttons').where('parentId', '==', parentId).where('text', '==', newButtonName).limit(1).get();
+                const existingButton = await db.collection('buttons_v2').where('parentId', '==', parentId).where('text', '==', newButtonName).limit(1).get();
                 if (!existingButton.empty && existingButton.docs[0].id !== buttonIdToRename) {
                     await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                     return ctx.reply(`⚠️ يوجد زر آخر بهذا الاسم "${newButtonName}". تم إلغاء التعديل.`);
                 }
-                await db.collection('buttons').doc(buttonIdToRename).update({ text: newButtonName });
+                await db.collection('buttons_v2').doc(buttonIdToRename).update({ text: newButtonName });
                 
                 // NEW: تحديث اسم الزر في سجل الإحصائيات
                 const statDocRef = getShardDocRef(buttonIdToRename);
@@ -840,7 +840,7 @@ const mainMessageHandler = async (ctx) => {
                     const { sourceButtonId, sourceButtonText } = stateData;
                     const newParentId = currentPath.split('/').pop();
                     try {
-                        const sourceButtonDoc = await db.collection('buttons').doc(sourceButtonId).get();
+                        const sourceButtonDoc = await db.collection('buttons_v2').doc(sourceButtonId).get();
                         if (!sourceButtonDoc.exists) {
                            await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                            return ctx.reply(`❌ خطأ: الزر المصدر غير موجود. تم إلغاء العملية.`, Markup.keyboard(await generateKeyboard(userId)).resize());
@@ -854,7 +854,7 @@ const mainMessageHandler = async (ctx) => {
                         }
 
                         // Check for infinite loop by moving into a child
-                        const isMovingIntoChild = newParentId !== 'root' && (await db.collection('buttons').doc(newParentId).get()).data().parentId.startsWith(`${oldParentId}/${sourceButtonId}`);
+                        const isMovingIntoChild = newParentId !== 'root' && (await db.collection('buttons_v2').doc(newParentId).get()).data().parentId.startsWith(`${oldParentId}/${sourceButtonId}`);
                         if (isMovingIntoChild) {
                              await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                              return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى داخل أحد فروعه.`, Markup.keyboard(await generateKeyboard(userId)).resize());
@@ -862,11 +862,11 @@ const mainMessageHandler = async (ctx) => {
                         
                         // New Logic: Move the document by updating parentId
                         await ctx.reply(`⏳ جاري نقل الزر [${sourceButtonText}] إلى القسم الحالي...`);
-                        await db.collection('buttons').doc(sourceButtonId).update({ parentId: newParentId });
+                        await db.collection('buttons_v2').doc(sourceButtonId).update({ parentId: newParentId });
                         
                         // Update the children array of both old and new parents
-                        const oldParentRef = oldParentId === 'root' ? null : db.collection('buttons').doc(oldParentId);
-                        const newParentRef = newParentId === 'root' ? null : db.collection('buttons').doc(newParentId);
+                        const oldParentRef = oldParentId === 'root' ? null : db.collection('buttons_v2').doc(oldParentId);
+                        const newParentRef = newParentId === 'root' ? null : db.collection('buttons_v2').doc(newParentId);
 
                         const batch = db.batch();
                         if (oldParentRef) {
@@ -1002,12 +1002,12 @@ const mainMessageHandler = async (ctx) => {
         }
 
         const currentButtonId = currentPath.split('/').pop();
-        const currentButtonDoc = currentPath === 'root' ? null : await db.collection('buttons').doc(currentButtonId).get();
+        const currentButtonDoc = currentPath === 'root' ? null : await db.collection('buttons_v2').doc(currentButtonId).get();
         let buttonInfo;
         let buttonId;
 
         if (currentPath === 'root') {
-            const buttonSnapshot = await db.collection('buttons').where('parentId', '==', 'root').where('text', '==', text).limit(1).get();
+            const buttonSnapshot = await db.collection('buttons_v2').where('parentId', '==', 'root').where('text', '==', text).limit(1).get();
             if (!buttonSnapshot.empty) {
                 buttonInfo = buttonSnapshot.docs[0].data();
                 buttonId = buttonSnapshot.docs[0].id;
@@ -1104,7 +1104,7 @@ bot.on('callback_query', async (ctx) => {
             if (subAction === 'yes') {
                 await ctx.editMessageText('⏳ جارٍ الحذف...');
                 const buttonToDeleteId = buttonId;
-                const buttonDoc = await db.collection('buttons').doc(buttonToDeleteId).get();
+                const buttonDoc = await db.collection('buttons_v2').doc(buttonToDeleteId).get();
                 
                 const statsRef = db.collection('config').doc('stats');
                 
@@ -1120,7 +1120,7 @@ bot.on('callback_query', async (ctx) => {
                     transaction.update(statDocRef, {
                         [`statsMap.${buttonToDeleteId}`]: admin.firestore.FieldValue.delete()
                     });
-                     transaction.delete(db.collection('buttons').doc(buttonToDeleteId));
+                     transaction.delete(db.collection('buttons_v2').doc(buttonToDeleteId));
                 });
                 
                 await ctx.deleteMessage().catch(()=>{});
@@ -1165,7 +1165,7 @@ bot.on('callback_query', async (ctx) => {
         if (action === 'btn') {
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 
-                const buttonsSnapshot = await db.collection('buttons').where('parentId', '==', currentPath).orderBy('order').get();
+                const buttonsSnapshot = await db.collection('buttons_v2').where('parentId', '==', currentPath).orderBy('order').get();
                 const buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
                 
                 let rows = [];
@@ -1265,7 +1265,7 @@ bot.on('callback_query', async (ctx) => {
                 return;
             }
            if (subAction === 'delete') {
-            const buttonDoc = await db.collection('buttons').doc(buttonId).get();
+            const buttonDoc = await db.collection('buttons_v2').doc(buttonId).get();
             if (!buttonDoc.exists) return ctx.answerCbQuery('الزر غير موجود بالفعل.');
 
             const confirmationKeyboard = Markup.inlineKeyboard([
@@ -1276,7 +1276,7 @@ bot.on('callback_query', async (ctx) => {
             return;
         }
             if (subAction === 'adminonly') {
-                const buttonRef = db.collection('buttons').doc(buttonId);
+                const buttonRef = db.collection('buttons_v2').doc(buttonId);
                 const buttonDoc = await buttonRef.get();
                 const adminOnly = !buttonDoc.data().adminOnly;
                 await buttonRef.update({ adminOnly });
@@ -1306,7 +1306,7 @@ bot.on('callback_query', async (ctx) => {
         }
 
         if (action === 'msg') {
-            const buttonRef = db.collection('buttons').doc(buttonId);
+            const buttonRef = db.collection('buttons_v2').doc(buttonId);
             const buttonDoc = await buttonRef.get();
             const messages = buttonDoc.data().messages || [];
             const messageIndex = messages.findIndex(msg => msg.id === messageId);
