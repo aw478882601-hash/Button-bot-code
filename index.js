@@ -893,71 +893,80 @@ const mainMessageHandler = async (ctx) => {
                     return ctx.reply('✂️ الخطوة 1: اختر الزر الذي تريد نقله (المصدر).');
                 }
                 break;
-            case '✅ النقل إلى هنا':
-                if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
-                    const { sourceButtonId, sourceButtonText } = stateData;
-                    const newParentId = currentPath.split('/').pop();
-                    try {
-                        const sourceButtonDoc = await db.collection('buttons_v2').doc(sourceButtonId).get();
-                        if (!sourceButtonDoc.exists) {
-                           await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                           return ctx.reply(`❌ خطأ: الزر المصدر غير موجود. تم إلغاء العملية.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                        }
-                        
-                        const oldParentId = sourceButtonDoc.data().parentId;
-                        
-                        if (newParentId === oldParentId) {
-                             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                             return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى نفس مكانه الحالي.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                        }
+    // MODIFIED: Corrected logic for moving a button.
+case '✅ النقل إلى هنا':
+    if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
+        const { sourceButtonId, sourceButtonText } = stateData;
+        const newParentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
+        try {
+            const sourceButtonDoc = await db.collection('buttons_v2').doc(sourceButtonId).get();
+            if (!sourceButtonDoc.exists) {
+               await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+               return ctx.reply(`❌ خطأ: الزر المصدر غير موجود. تم إلغاء العملية.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            }
+            
+            const oldParentId = sourceButtonDoc.data().parentId;
+            
+            if (newParentId === oldParentId) {
+                 await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+                 return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى نفس مكانه الحالي.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            }
 
-                        // Check for infinite loop by moving into a child
-                        const isMovingIntoChild = newParentId !== 'root' && (await db.collection('buttons_v2').doc(newParentId).get()).data().parentId.startsWith(`${oldParentId}/${sourceButtonId}`);
-                        if (isMovingIntoChild) {
-                             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                             return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى داخل أحد فروعه.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                        }
-                        
-                        // New Logic: Move the document by updating parentId
-                        await ctx.reply(`⏳ جاري نقل الزر [${sourceButtonText}] إلى القسم الحالي...`);
-                        await db.collection('buttons_v2').doc(sourceButtonId).update({ parentId: newParentId });
-                        
-                        // Update the children array of both old and new parents
-                        const oldParentRef = oldParentId === 'root' ? null : db.collection('buttons_v2').doc(oldParentId);
-                        const newParentRef = newParentId === 'root' ? null : db.collection('buttons_v2').doc(newParentId);
+            // Check for infinite loop by moving into a child
+            const isMovingIntoChild = newParentId !== 'root' && (await db.collection('buttons_v2').doc(newParentId).get()).data().parentId.startsWith(`${oldParentId}/${sourceButtonId}`);
+            if (isMovingIntoChild) {
+                 await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+                 return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى داخل أحد فروعه.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            }
+            
+            // New Logic: Move the document by updating parentId
+            await ctx.reply(`⏳ جاري نقل الزر [${sourceButtonText}] إلى القسم الحالي...`);
+            
+            const batch = db.batch();
+            
+            // 1. Update the source button's parentId
+            const sourceButtonRef = db.collection('buttons_v2').doc(sourceButtonId);
+            batch.update(sourceButtonRef, { parentId: newParentId });
 
-                        const batch = db.batch();
-                        if (oldParentRef) {
-                            const oldParentDoc = await oldParentRef.get();
-                            const oldChildren = (oldParentDoc.data().children || []).filter(c => c.id !== sourceButtonId);
-                            batch.update(oldParentRef, { children: oldChildren });
-                        }
-
-                        if (newParentRef) {
-                            const newParentDoc = await newParentRef.get();
-                            const newChildren = newParentDoc.data().children || [];
-                            const newChildInfo = {
-                                id: sourceButtonId,
-                                text: sourceButtonText,
-                                order: newChildren.length,
-                                isFullWidth: sourceButtonDoc.data().isFullWidth
-                            };
-                            newChildren.push(newChildInfo);
-                            batch.update(newParentRef, { children: newChildren, hasChildren: true });
-                        }
-
-                        await batch.commit();
-
-                        await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                        return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-
-                    } catch (error) {
-                        console.error("Move button error in handler:", error.message, { sourceButtonId, newParentId });
-                        await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                        return ctx.reply(`❌ حدث خطأ أثناء نقل الزر. تم إبلاغ المطور.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                    }
+            // 2. Remove the button from the old parent's children array
+            if (oldParentId !== 'root') {
+                const oldParentRef = db.collection('buttons_v2').doc(oldParentId);
+                const oldParentDoc = await oldParentRef.get();
+                if (oldParentDoc.exists) {
+                    const oldChildren = (oldParentDoc.data().children || []).filter(c => c.id !== sourceButtonId);
+                    batch.update(oldParentRef, { children: oldChildren });
                 }
-                break;
+            }
+
+            // 3. Add the button to the new parent's children array
+            if (newParentId !== 'root') {
+                const newParentRef = db.collection('buttons_v2').doc(newParentId);
+                const newParentDoc = await newParentRef.get();
+                if (newParentDoc.exists) {
+                    const newChildren = newParentDoc.data().children || [];
+                    const newChildInfo = {
+                        id: sourceButtonId,
+                        text: sourceButtonText,
+                        order: newChildren.length,
+                        isFullWidth: sourceButtonDoc.data().isFullWidth
+                    };
+                    newChildren.push(newChildInfo);
+                    batch.update(newParentRef, { children: newChildren, hasChildren: true });
+                }
+            }
+            
+            await batch.commit();
+
+            await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+            return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+
+        } catch (error) {
+            console.error("Move button error in handler:", error.message, { sourceButtonId, newParentId });
+            await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+            return ctx.reply(`❌ حدث خطأ أثناء نقل الزر. تم إبلاغ المطور.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+        }
+    }
+    break;
             case '❌ إلغاء النقل':
                 if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
                     await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
