@@ -1158,6 +1158,7 @@ bot.on('callback_query', async (ctx) => {
             }
         }
         if (action === 'admin') {
+          const [, , targetId] = data.split(':');
            if (subAction === 'reply') {
                 await userRef.update({ state: 'AWAITING_ADMIN_REPLY', stateData: { targetUserId: targetId } });
                 await ctx.answerCbQuery();
