@@ -31,80 +31,69 @@ async function trackSentMessages(userId, messageIds) {
     await userRef.update({ 'stateData.messageViewIds': messageIds });
 }
 async function getTopButtons(period) {
-    let query;
     const statsCollection = db.collection('button_stats');
+    let query;
 
-    // تحديد كيفية الاستعلام بناءً على الفترة
-    if (period === 'today') {
+    if (period === 'all_time') {
+        query = statsCollection.orderBy('totalClicks', 'desc').limit(10);
+    } else if (period === 'today') {
         const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-        query = statsCollection.where(`daily.${todayStr}.clicks`, '>', 0)
-                               .orderBy(`daily.${todayStr}.clicks`, 'desc');
-    } else if (period === 'all_time') {
-        query = statsCollection.orderBy('totalClicks', 'desc');
+        // هذا الاستعلام يتطلب فهرسًا مخصصًا. Firestore سيرشدك لإنشائه.
+        query = statsCollection.orderBy(`daily.${todayStr}.clicks`, 'desc').limit(10);
     } else if (period === 'weekly') {
-        // هذه الحالة تتطلب معالجة خاصة
-        // سنقرأ كل الإحصائيات ونجمعها يدوياً للتبسيط
-        // للحصول على أداء أفضل، يمكن تجميع الإحصائيات الأسبوعية مسبقاً
-        const allStatsSnapshot = await statsCollection.get();
+        const d = new Date();
+        d.setDate(d.getDate() - 7);
+        const sevenDaysAgoStr = d.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+
+        // نقوم بجلب الأزرار النشطة في آخر 7 أيام فقط
+        const weeklySnapshot = await statsCollection.where('lastUpdated', '>=', sevenDaysAgoStr).get();
+        if (weeklySnapshot.empty) return 'لا توجد بيانات لعرضها في هذه الفترة.';
+
         let buttonStats = [];
-        
-        for (const doc of allStatsSnapshot.docs) {
+        for (const doc of weeklySnapshot.docs) {
             const stats = doc.data();
             let weeklyClicks = 0;
-            let weeklyUsers = 0; // ملاحظة: حساب المستخدمين الفريدين أسبوعياً لا يزال معقداً
+            let weeklyUsers = 0;
 
             for (let i = 0; i < 7; i++) {
-                const d = new Date();
-                d.setDate(d.getDate() - i);
-                const dateStr = d.toLocaleString('en-CA', { timeZone: 'Africa/Cairo' });
+                const day = new Date();
+                day.setDate(day.getDate() - i);
+                const dateStr = day.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
                 if (stats.daily && stats.daily[dateStr]) {
                     weeklyClicks += stats.daily[dateStr].clicks || 0;
-                    weeklyUsers += stats.daily[dateStr].uniqueUsers || 0; // هذا تقدير وليس عدداً فريداً دقيقاً
+                    weeklyUsers += stats.daily[dateStr].uniqueUsers || 0;
                 }
             }
-
             if (weeklyClicks > 0) {
-                buttonStats.push({
-                    name: stats.buttonText,
-                    clicks: weeklyClicks,
-                    users: weeklyUsers // عدد تقديري
-                });
+                buttonStats.push({ name: stats.buttonText, clicks: weeklyClicks, users: weeklyUsers });
             }
         }
-        
         buttonStats.sort((a, b) => b.clicks - a.clicks);
         const top10 = buttonStats.slice(0, 10);
-        
         if (top10.length === 0) return 'لا توجد بيانات لعرضها في هذه الفترة.';
-        
-        return top10.map((btn, index) => 
+        return top10.map((btn, index) =>
             `${index + 1}. *${btn.name}*\n   - 🖱️ الضغطات: \`${btn.clicks}\`\n   - 👤 المستخدمون: \`${btn.users}\``
         ).join('\n\n');
+    } else {
+        return 'فترة غير معروفة.';
     }
 
-    // التنفيذ لـ today و all_time
-    const snapshot = await query.limit(10).get();
-    if (snapshot.empty) {
-        return 'لا توجد بيانات لعرضها في هذه الفترة.';
-    }
+    const snapshot = await query.get();
+    if (snapshot.empty) return 'لا توجد بيانات لعرضها في هذه الفترة.';
 
     let report = snapshot.docs.map((doc, index) => {
         const data = doc.data();
-        let clicks = 0;
-        let users = 0;
-        
+        let clicks = 0, users = 0;
         if (period === 'today') {
             const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-            clicks = data.daily[todayStr]?.clicks || 0;
-            users = data.daily[todayStr]?.uniqueUsers || 0;
+            clicks = data.daily?.[todayStr]?.clicks || 0;
+            users = data.daily?.[todayStr]?.uniqueUsers || 0;
         } else { // all_time
             clicks = data.totalClicks || 0;
-            users = data.totalUniqueUsers || 0; // الرقم التقديري
+            users = data.totalUniqueUsers || 0;
         }
-        
         return `${index + 1}. *${data.buttonText}*\n   - 🖱️ الضغطات: \`${clicks}\`\n   - 👤 المستخدمون: \`${users}\``;
     }).join('\n\n');
-
     return report;
 }
 
@@ -812,40 +801,34 @@ const mainMessageHandler = async (ctx) => {
 
         if (currentPath === 'supervision' && isAdmin) {
              switch (text) {
-                case '📊 الإحصائيات': {
-                    // إرسال رسالة مؤقتة لإعلام المستخدم بالانتظار
-                    const waitingMessage = await ctx.reply('⏳ جارٍ تجميع كافة الإحصائيات والتقارير المتقدمة، يرجى الانتظار...');
+               case '📊 الإحصائيات': {
+    // --- 1. الإحصائيات العامة ---
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+    const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
+    const statsDoc = await db.collection('config').doc('stats').get();
+    const { totalButtons = 0, totalMessages = 0, totalUsers = 0 } = statsDoc.data() || {};
+    const generalStats = `*📊 الإحصائيات العامة:*\n\n` + `👤 المستخدمون: \`${totalUsers}\` (نشط اليوم: \`${dailyActiveUsers}\`)\n` + `🔘 الأزرار: \`${totalButtons}\`\n` + `✉️ الرسائل: \`${totalMessages}\``;
 
-                    // --- 1. الإحصائيات العامة ---
-                    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-                    const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
-                    const statsDoc = await db.collection('config').doc('stats').get();
-                    const { totalButtons = 0, totalMessages = 0, totalUsers = 0 } = statsDoc.data() || {};
-                    const generalStats = `*📊 الإحصائيات العامة:*\n\n` + `👤 المستخدمون: \`${totalUsers}\` (نشط اليوم: \`${dailyActiveUsers}\`)\n` + `🔘 الأزرار: \`${totalButtons}\`\n` + `✉️ الرسائل: \`${totalMessages}\``;
+    // --- 2. الأزرار الأكثر استخداماً ---
+    const topToday = await getTopButtons('today');
+    const topWeekly = await getTopButtons('weekly');
+    const topAllTime = await getTopButtons('all_time');
+    const topButtonsReport = `*🔥 الأكثر استخداماً (اليوم):*\n${topToday}\n\n` + `*📅 الأكثر استخداماً (أسبوع):*\n${topWeekly}\n\n` + `*🏆 الأكثر استخداماً (الكلي):*\n${topAllTime}`;
 
-                    // --- 2. الأزرار الأكثر استخداماً ---
-                    const topToday = await getTopButtons('today');
-                    const topWeekly = await getTopButtons('weekly');
-                    const topAllTime = await getTopButtons('all_time');
-                    const topButtonsReport = `*🔥 الأكثر استخداماً (اليوم):*\n${topToday}\n\n` + `*📅 الأكثر استخداماً (أسبوع):*\n${topWeekly}\n\n` + `*🏆 الأكثر استخداماً (الكلي):*\n${topAllTime}`;
+    // --- 3. المستخدمون غير النشطين ---
+    const date = new Date();
+    date.setDate(date.getDate() - 10);
+    const cutoffDate = date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).get();
+    const inactiveCount = inactiveSnapshot.size;
+    const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;
 
-                   // --- 3. المستخدمون غير النشطين ---
-                    const date = new Date();
-                    date.setDate(date.getDate() - 10);
-                    const cutoffDate = date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-                    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).get();
-                    
-                    const inactiveCount = inactiveSnapshot.size;
-                    const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;
-
-                    // --- تجميع كل التقارير في رسالة واحدة ---
-                    const finalReport = `${generalStats}\n\n---\n\n${topButtonsReport}\n\n---\n\n${inactiveUsersReport}`;
-
-                    // تعديل الرسالة المؤقتة لعرض التقرير النهائي
-                    await ctx.telegram.editMessageText(ctx.chat.id, waitingMessage.message_id, undefined, finalReport, { parse_mode: 'Markdown' });
-                    
-                    return; // Return to prevent any other replies
-                }
+    // --- تجميع كل التقارير وإرسالها في رسالة واحدة ---
+    const finalReport = `${generalStats}\n\n---\n\n${topButtonsReport}\n\n---\n\n${inactiveUsersReport}`;
+    await ctx.replyWithMarkdown(finalReport);
+    
+    return;
+}
                 case '🗣️ رسالة جماعية':
                     await userRef.update({ state: 'AWAITING_BROADCAST' });
                     return ctx.reply('أرسل الآن الرسالة التي تريد بثها لجميع المستخدمين:');
