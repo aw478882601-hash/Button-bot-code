@@ -6,24 +6,15 @@
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
 const { Telegraf, Markup } = require('telegraf');
 const admin = require('firebase-admin');
-const { Redis } = require("@upstash/redis");// <-- إضافة Redis
+const { Redis } = require("@upstash/redis"); // Correct import
 
-// --- إعداد Redis ---
-const redisClient = createClient({
-    // إذا كان Redis على نفس الخادم، لا تحتاج لوضع رابط
-    // url: 'redis://user:password@localhost:6379' 
+// --- إعداد Redis (الطريقة الصحيحة لـ Upstash) ---
+const redisClient = new Redis({
+  url: process.env.UPSTASH_REDIS_URL,
+  token: process.env.UPSTASH_REDIS_TOKEN,
 });
 
-redisClient.on('error', err => console.log('Redis Client Error', err));
-
-(async () => {
-    try {
-        await redisClient.connect();
-        console.log('Connected to Redis successfully!');
-    } catch (err) {
-        console.error('Could not connect to Redis:', err);
-    }
-})();
+console.log('Upstash Redis client initialized.');
 
 
 // --- 2. تهيئة Firebase ---
