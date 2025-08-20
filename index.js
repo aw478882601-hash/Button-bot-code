@@ -249,54 +249,62 @@ async function clearAndResendMessages(ctx, userId, buttonId) {
 async function updateButtonStats(buttonId, userId, buttonText) {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
     const statsRef = db.collection('button_stats').doc(buttonId);
-    const userLogRef = db.collection('button_user_log').doc(`${buttonId}_${today}`);
+    
+    // هذا collection مساعد لتتبع المستخدمين الفريدين يوميًا بكفاءة
+    const userLogRef = db.collection('daily_user_log').doc(`${buttonId}_${today}`);
 
     try {
         await db.runTransaction(async (transaction) => {
+            const statsDoc = await transaction.get(statsRef);
             const userLogDoc = await transaction.get(userLogRef);
-            const userSet = new Set(userLogDoc.exists ? userLogDoc.data().users : []);
             
+            const userSet = new Set(userLogDoc.exists ? userLogDoc.data().users : []);
             const isNewUserForToday = !userSet.has(userId);
+
             if (isNewUserForToday) {
                 userSet.add(userId);
                 transaction.set(userLogRef, { users: Array.from(userSet) });
             }
 
-            const statsDoc = await transaction.get(statsRef);
             if (!statsDoc.exists) {
-                // إنشاء سجل إحصائيات جديد إذا لم يكن موجوداً
-                transaction.set(statsRef, {
+                // --- هذا الجزء هو الذي تم إصلاحه ---
+                // إنشاء سجل إحصائيات جديد بالشكل الصحيح
+                const newStatsData = {
                     buttonId: buttonId,
                     buttonText: buttonText,
                     totalClicks: 1,
-                    [`daily.${today}.clicks`]: 1,
-                    totalUniqueUsers: admin.firestore.FieldValue.increment(1), // سنحتاج لطريقة أدق
-                    [`daily.${today}.uniqueUsers`]: 1,
+                    totalUniqueUsers: 1, // تقدير أولي
+                    daily: {
+                        [today]: { // إنشاء الكائن المتداخل مباشرة
+                            clicks: 1,
+                            uniqueUsers: 1
+                        }
+                    },
                     lastUpdated: today
-                });
+                };
+                transaction.set(statsRef, newStatsData);
+                // ------------------------------------
             } else {
-                // تحديث السجل الحالي
+                // تحديث السجل الحالي (هذا الجزء كان صحيحًا)
                 const updates = {
                     'totalClicks': admin.firestore.FieldValue.increment(1),
                     [`daily.${today}.clicks`]: admin.firestore.FieldValue.increment(1),
-                    'buttonText': buttonText, // تحديث الاسم في حال تغير
+                    'buttonText': buttonText,
                     'lastUpdated': today
                 };
 
                 if (isNewUserForToday) {
                     updates[`daily.${today}.uniqueUsers`] = admin.firestore.FieldValue.increment(1);
-                    // ملاحظة: totalUniqueUsers تحتاج إلى حل أكثر تعقيداً للحفاظ على دقتها
-                    // ولكن للتبسيط، يمكن تركها أو استخدام Cloud Function لعدها بشكل دوري.
+                    // ملاحظة: totalUniqueUsers يتطلب منطقًا أكثر تعقيدًا ليظل دقيقًا 100%
                 }
                 
                 transaction.update(statsRef, updates);
             }
         });
     } catch (e) {
-        console.error(`Button stats transaction failed for button ${buttonId}:`, e);
+        console.error(`Button stats transaction failed for button ${buttonId}:`, e.message);
     }
 }
-
 async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, messages: 0 }) {
     const subButtons = await db.collection('buttons').where('parentId', '==', buttonPath).get();
     for (const sub of subButtons.docs) {
