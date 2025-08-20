@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V54 - STABLE MOVE BUILD             |
+// |   TELEGRAM FIREBASE BOT - V55 - CORRECTED V2 BUILD            |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -380,7 +380,7 @@ async function moveBranch(sourceButtonId, newParentPath) {
         await batch.commit();
 
     } catch (error) {
-        console.error(`[moveBranch Error] Failed to move button ${sourceButtonId} to ${newParentPath}:`, error);
+        console.error(`[moveBranch Error] Failed to move button ${sourceButtonId} to ${newParentId}:`, error);
         throw error;
     }
 }
