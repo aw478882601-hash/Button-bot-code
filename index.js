@@ -896,7 +896,8 @@ const mainMessageHandler = async (ctx) => {
                 }
                 break;
     // MODIFIED: Corrected logic for moving a button.
-            case '✅ النقل إلى هنا':
+         // MODIFIED: Corrected logic for moving a button.
+case '✅ النقل إلى هنا':
     if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
         const { sourceButtonId, sourceButtonText } = stateData;
         const newParentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
