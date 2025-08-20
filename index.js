@@ -357,6 +357,7 @@ async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, mes
     return statsUpdate;
 }
 
+// MODIFIED: This function is simplified because moving a button is now a single-document operation
 // MODIFIED: This function is simplified because moving a button is now a single-document operation.
 async function moveBranch(sourceButtonId, newParentPath) {
     try {
@@ -377,6 +378,34 @@ async function moveBranch(sourceButtonId, newParentPath) {
         // New logic: Update the parentId field of the source button itself
         const batch = db.batch();
         batch.update(sourceButtonRef, { parentId: newParentId });
+
+        // 1. Remove the button from the old parent's children array
+        if (oldParentId !== 'root') {
+             const oldParentRef = db.collection('buttons_v2').doc(oldParentId);
+             const oldParentDoc = await oldParentRef.get();
+             if (oldParentDoc.exists) {
+                 const oldChildren = (oldParentDoc.data().children || []).filter(c => c.id !== sourceButtonId);
+                 batch.update(oldParentRef, { children: oldChildren });
+             }
+        }
+
+        // 2. Add the button to the new parent's children array
+        if (newParentId !== 'root') {
+             const newParentRef = db.collection('buttons_v2').doc(newParentId);
+             const newParentDoc = await newParentRef.get();
+             if (newParentDoc.exists) {
+                 const newChildren = newParentDoc.data().children || [];
+                 const newChildInfo = {
+                     id: sourceButtonId,
+                     text: sourceData.text,
+                     order: newChildren.length,
+                     isFullWidth: sourceData.isFullWidth
+                 };
+                 newChildren.push(newChildInfo);
+                 batch.update(newParentRef, { children: newChildren, hasChildren: true });
+             }
+        }
+        
         await batch.commit();
 
     } catch (error) {
