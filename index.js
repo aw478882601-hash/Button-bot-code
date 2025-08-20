@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V57 - MIGRATION COMMAND ADDED      |
+// |   TELEGRAM FIREBASE BOT - V56 - FIXED BUTTON ADDING           |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -182,7 +182,7 @@ async function generateKeyboard(userId) {
     if (isAdmin) {
         const editContentText = state === 'EDITING_CONTENT' ? '🚫 إلغاء تعديل المحتوى' : '📄 تعديل المحتوى';
         const editButtonsText = state === 'EDITING_BUTTONS' ? '🚫 إلغاء تعديل الأزرار' : '✏️ تعديل الأزرار';
-        keyboardRows.push([editButtonsText, editContentText, '⚙️ ترحيل البيانات']);
+        keyboardRows.push([editButtonsText, editContentText]);
     }
 
     const finalRow = [];
@@ -384,129 +384,6 @@ async function moveBranch(sourceButtonId, newParentPath) {
         throw error;
     }
 }
-
-// NEW: دالة ترحيل البيانات المدمجة
-/**
- * دالة لترحيل مستندات الرسائل إلى مصفوفة مدمجة داخل مستند الزر.
- * @param {string} buttonId - ID الزر الأب.
- * @returns {Promise<Array>} مصفوفة الرسائل المدمجة.
- */
-async function migrateMessages(buttonId) {
-    const messagesSnapshot = await db.collection('messages').where('buttonId', '==', buttonId).orderBy('order').get();
-    const migratedMessages = [];
-    const messagesToDeleteBatch = db.batch();
-
-    messagesSnapshot.docs.forEach(doc => {
-        const messageData = doc.data();
-        migratedMessages.push({
-            id: doc.id,
-            type: messageData.type,
-            content: messageData.content,
-            caption: messageData.caption || '',
-            order: messageData.order,
-            entities: messageData.entities || []
-        });
-        // أضف عملية حذف المستند القديم من كولكشن 'messages'
-        messagesToDeleteBatch.delete(doc.ref);
-    });
-
-    await messagesToDeleteBatch.commit();
-    return migratedMessages;
-}
-
-/**
- * دالة لترحيل الأزرار الفرعية بشكل تكراري (recursively).
- * @param {string} parentId - ID الزر الأب الحالي.
- * @returns {Promise<Array>} مصفوفة الأزرار الفرعية المدمجة.
- */
-async function migrateChildren(parentId) {
-    const childrenSnapshot = await db.collection('buttons').where('parentId', '==', parentId).orderBy('order').get();
-    const migratedChildren = [];
-    
-    for (const doc of childrenSnapshot.docs) {
-        const buttonData = doc.data();
-        const buttonId = doc.id;
-
-        console.log(`Migrating button: ${buttonData.text} (ID: ${buttonId})`);
-
-        const messages = await migrateMessages(buttonId);
-        const children = await migrateChildren(buttonId);
-
-        const newButtonData = {
-            id: buttonId,
-            text: buttonData.text,
-            parentId: buttonData.parentId,
-            order: buttonData.order,
-            isFullWidth: buttonData.isFullWidth || false,
-            adminOnly: buttonData.adminOnly || false,
-            messages: messages,
-            children: children,
-            hasMessages: messages.length > 0,
-            hasChildren: children.length > 0
-        };
-
-        await db.collection('buttons_v2').doc(buttonId).set(newButtonData);
-
-        migratedChildren.push({
-            id: buttonId,
-            text: buttonData.text,
-            order: buttonData.order,
-            isFullWidth: buttonData.isFullWidth || false,
-            adminOnly: buttonData.adminOnly || false
-        });
-
-        await db.collection('buttons').doc(buttonId).delete();
-        console.log(`Successfully migrated and deleted original button ${buttonId}.`);
-    }
-
-    return migratedChildren;
-}
-
-/**
- * دالة رئيسية لبدء عملية الترحيل من الأزرار الجذرية.
- */
-async function startMigration(ctx) {
-    await ctx.reply('⏳ جارٍ بدء عملية ترحيل البيانات. يرجى الانتظار...');
-
-    try {
-        const rootButtonsSnapshot = await db.collection('buttons').where('parentId', '==', 'root').orderBy('order').get();
-
-        if (rootButtonsSnapshot.empty) {
-            await ctx.reply('✅ لا توجد أزرار قديمة لترحيلها. عملية الترحيل مكتملة.');
-            return;
-        }
-        
-        for (const doc of rootButtonsSnapshot.docs) {
-            const buttonData = doc.data();
-            const buttonId = doc.id;
-            
-            const messages = await migrateMessages(buttonId);
-            const children = await migrateChildren(buttonId);
-
-            const newButtonData = {
-                id: buttonId,
-                text: buttonData.text,
-                parentId: buttonData.parentId,
-                order: buttonData.order,
-                isFullWidth: buttonData.isFullWidth || false,
-                adminOnly: buttonData.adminOnly || false,
-                messages: messages,
-                children: children,
-                hasMessages: messages.length > 0,
-                hasChildren: children.length > 0
-            };
-
-            await db.collection('buttons_v2').doc(buttonId).set(newButtonData);
-            await db.collection('buttons').doc(buttonId).delete();
-        }
-
-        await ctx.reply('🎉 تم ترحيل جميع البيانات بنجاح!');
-    } catch (error) {
-        console.error('Migration failed:', error);
-        await ctx.reply('❌ حدث خطأ أثناء ترحيل البيانات. يرجى التحقق من السجلات.');
-    }
-}
-
 
 // =================================================================
 // |                       Bot Commands & Logic                      |
@@ -721,14 +598,9 @@ const mainMessageHandler = async (ctx) => {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
                 const newButtonName = ctx.message.text;
                 
-                // FIXED: Get the parent document to update its children array
-                const parentId = currentPath === 'root' ? null : currentPath.split('/').pop();
-                const parentRef = parentId ? db.collection('buttons_v2').doc(parentId) : null;
-                const parentDoc = parentId ? await parentRef.get() : null;
-
-                const childrenArray = parentDoc ? parentDoc.data().children || [] : [];
-                const newOrder = childrenArray.length;
-
+                const lastButton = await db.collection('buttons_v2').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
+                const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
+                
                 // NEW: Prepare a batch to perform multiple atomic writes.
                 const batch = db.batch();
                 
@@ -740,8 +612,8 @@ const mainMessageHandler = async (ctx) => {
                     text: newButtonName, 
                     parentId: currentPath, 
                     order: newOrder, 
-                    isFullWidth: true,
                     adminOnly: false, 
+                    isFullWidth: true,
                     hasMessages: false,
                     hasChildren: false,
                     messages: [],
@@ -750,9 +622,14 @@ const mainMessageHandler = async (ctx) => {
                 batch.set(newButtonRef, newButtonData);
 
                 // 2. Update the parent's children array
-                if (parentRef) {
-                    childrenArray.push({ id: newButtonId, text: newButtonName, order: newOrder, isFullWidth: true, adminOnly: false });
-                    batch.update(parentRef, { children: childrenArray, hasChildren: true });
+                if (currentPath !== 'root') {
+                    const parentButtonRef = db.collection('buttons_v2').doc(currentPath.split('/').pop());
+                    const parentDoc = await parentButtonRef.get();
+                    if (parentDoc.exists) {
+                        const children = parentDoc.data().children || [];
+                        children.push({ id: newButtonId, text: newButtonName, order: newOrder, isFullWidth: true });
+                        batch.update(parentButtonRef, { children, hasChildren: true });
+                    }
                 }
                 
                 // 3. Create initial stats record
@@ -786,51 +663,20 @@ const mainMessageHandler = async (ctx) => {
                      await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                      return ctx.reply('حدث خطأ، لم يتم العثور على الزر المراد تعديله.');
                 }
-                const buttonRefToRename = db.collection('buttons_v2').doc(buttonIdToRename);
-                const buttonDoc = await buttonRefToRename.get();
+                const buttonDoc = await db.collection('buttons_v2').doc(buttonIdToRename).get();
                 const parentId = buttonDoc.data().parentId;
+                const existingButton = await db.collection('buttons_v2').where('parentId', '==', parentId).where('text', '==', newButtonName).limit(1).get();
+                if (!existingButton.empty && existingButton.docs[0].id !== buttonIdToRename) {
+                    await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
+                    return ctx.reply(`⚠️ يوجد زر آخر بهذا الاسم "${newButtonName}". تم إلغاء التعديل.`);
+                }
+                await db.collection('buttons_v2').doc(buttonIdToRename).update({ text: newButtonName });
                 
-                let existingButtonCheck;
-                if (parentId === 'root') {
-                    const existingButtonSnapshot = await db.collection('buttons_v2').where('parentId', '==', parentId).where('text', '==', newButtonName).limit(1).get();
-                    existingButtonCheck = existingButtonSnapshot.empty ? null : existingButtonSnapshot.docs[0];
-                } else {
-                    const parentDoc = await db.collection('buttons_v2').doc(parentId).get();
-                    const children = parentDoc.data().children || [];
-                    const foundChild = children.find(c => c.text === newButtonName);
-                    if (foundChild) {
-                        if (foundChild.id !== buttonIdToRename) {
-                            return ctx.reply(`⚠️ يوجد زر آخر بهذا الاسم "${newButtonName}". تم إلغاء التعديل.`);
-                        }
-                    }
-                }
-                if (existingButtonCheck && existingButtonCheck.id !== buttonIdToRename) {
-                     await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                     return ctx.reply(`⚠️ يوجد زر آخر بهذا الاسم "${newButtonName}". تم إلغاء التعديل.`);
-                }
-                
-                // Update the button and its parent's children array
-                const batch = db.batch();
-                batch.update(buttonRefToRename, { text: newButtonName });
-
-                if (parentId !== 'root') {
-                    const parentRef = db.collection('buttons_v2').doc(parentId);
-                    const parentDoc = await parentRef.get();
-                    const children = parentDoc.data().children || [];
-                    const childIndex = children.findIndex(c => c.id === buttonIdToRename);
-                    if (childIndex !== -1) {
-                        children[childIndex].text = newButtonName;
-                        batch.update(parentRef, { children });
-                    }
-                }
-
-                // Update stats name
+                // NEW: تحديث اسم الزر في سجل الإحصائيات
                 const statDocRef = getShardDocRef(buttonIdToRename);
-                batch.update(statDocRef, {
+                await statDocRef.update({
                     [`statsMap.${buttonIdToRename}.name`]: newButtonName
                 });
-
-                await batch.commit();
 
                 await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
                 await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userId)).resize());
