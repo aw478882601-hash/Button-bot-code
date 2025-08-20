@@ -1,5 +1,5 @@
 // =================================================================
-// |   ملف مخصص للإصلاح الشامل (ترحيل، إنشاء، وإصلاح الأسماء)       |
+// |   ملف مخصص للترحيل الشامل والنهائي لبيانات الإحصائيات القديمة    |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -37,8 +37,8 @@ function simpleHash(text) {
 }
 
 // الدالة الرئيسية التي تقوم بالعملية الشاملة
-async function runFinalFixScript(ctx) {
-    let reportLines = ['🚀 *بدء عملية الإصلاح والترحيل النهائية...*'];
+async function runDefinitiveMigrationScript(ctx) {
+    let reportLines = ['🚀 *بدء عملية الترحيل والإصلاح النهائية...*'];
     let totalFixed = 0;
     let totalMigrated = 0;
     let totalCreated = 0;
@@ -77,12 +77,13 @@ async function runFinalFixScript(ctx) {
             }
 
             const currentStat = allCurrentStats[buttonId];
-            const oldStat = buttonData.stats;
+            const oldStat = buttonData.stats; // الإحصائيات القديمة المخزنة في الزر نفسه
 
             // الحالة 1: السجل غير موجود في نظام الإحصائيات الجديد
             if (!currentStat) {
-                // إذا وجدنا بيانات قديمة، نقوم بـ "ترحيلها"
-                if (oldStat && oldStat.totalClicks > 0) {
+                // *** التعديل الجوهري هنا ***
+                // إذا وجدنا أي أثر لبيانات قديمة (مجرد وجود الكائن stats)، نقوم بـ "ترحيلها"
+                if (oldStat) {
                     updatesByShard[correctShardIndex][`statsMap.${buttonId}`] = {
                         name: buttonData.text,
                         totalClicks: oldStat.totalClicks || 0,
@@ -92,7 +93,7 @@ async function runFinalFixScript(ctx) {
                     };
                     totalMigrated++;
                 } 
-                // إذا لم توجد بيانات قديمة، نقوم بـ "إنشاء" سجل جديد له
+                // إذا لم توجد بيانات قديمة على الإطلاق، نقوم بـ "إنشاء" سجل جديد له
                 else {
                     updatesByShard[correctShardIndex][`statsMap.${buttonId}`] = {
                         name: buttonData.text,
@@ -118,6 +119,7 @@ async function runFinalFixScript(ctx) {
             const updates = updatesByShard[shardIndex];
             if (Object.keys(updates).length > 0) {
                 const shardRef = db.collection('statistics').doc(`button_stats_shard_${shardIndex}`);
+                // استخدام set مع merge لإنشاء المستند أو دمجه بأمان
                 await shardRef.set({ statsMap: updates }, { merge: true });
                 reportLines.push(`- ✅ تم تحديث المستند \`button_stats_shard_${shardIndex}\``);
                 shardsUpdatedCount++;
@@ -134,7 +136,7 @@ async function runFinalFixScript(ctx) {
         reportLines.push(`- السجلات التي تم إصلاح أسمائها: *${totalFixed}*`);
 
     } catch (error) {
-        console.error("Error during final fix script:", error);
+        console.error("Error during definitive migration script:", error);
         reportLines.push(`\n\n❌ *حدث خطأ فادح أثناء العملية.*`);
         reportLines.push(`- ${error.message}`);
     }
@@ -147,20 +149,20 @@ async function runFinalFixScript(ctx) {
 // =================================================================
 
 bot.start((ctx) => {
-    ctx.reply('أهلاً بك. هذا البوت مخصص لعملية الإصلاح والترحيل النهائية لبيانات الإحصائيات.\n\nأرسل /finalfix لبدء العملية (للأدمن الرئيسي فقط).');
+    ctx.reply('أهلاً بك. هذا البوت مخصص لعملية الترحيل والإصلاح النهائية لبيانات الإحصائيات.\n\nأرسل /migrate لبدء العملية (للأدمن الرئيسي فقط).');
 });
 
-bot.command('finalfix', async (ctx) => {
+bot.command('migrate', async (ctx) => {
     const userId = String(ctx.from.id);
     if (userId !== process.env.SUPER_ADMIN_ID) {
         return ctx.reply('🚫 هذا الأمر مخصص للمشرف الرئيسي فقط.');
     }
 
     try {
-        await ctx.reply('⏳ حسنًا، سأبدأ الآن العملية النهائية. هذه العملية ستضمن أن كل زر له سجل إحصائي صحيح... سأرسل لك تقريرًا عند الانتهاء.');
-        await runFinalFixScript(ctx);
+        await ctx.reply('⏳ حسنًا، سأبدأ الآن العملية النهائية والشاملة. هذه العملية ستضمن أن كل زر له سجل إحصائي صحيح... سأرسل لك تقريرًا عند الانتهاء.');
+        await runDefinitiveMigrationScript(ctx);
     } catch (error) {
-        console.error('Error triggering final fix script:', error);
+        console.error('Error triggering migration script:', error);
         await ctx.reply('❌ حدث خطأ أثناء محاولة بدء العملية.');
     }
 });
@@ -174,7 +176,7 @@ module.exports = async (req, res) => {
         if (req.method === 'POST' && req.body) {
             await bot.handleUpdate(req.body, res);
         } else {
-            res.status(200).send('Final Fix & Migration Bot is running.');
+            res.status(200).send('Definitive Migration Bot is running.');
         }
     } catch (err) {
         console.error('Error in webhook handler:', err.message);
