@@ -1,17 +1,16 @@
 {
-  "name": "telegram-firebase-bot-final",
+  "name": "telegram-firebase-redis-bot",
   "version": "1.0.0",
-  "description": "Fully optimized Telegram bot with Firestore and Redis Caching",
+  "description": "A Telegram bot using Firebase and Upstash Redis for caching.",
   "main": "index.js",
-  "dependencies": {
-    "firebase-admin": "^12.1.1",
-    "ioredis": "^5.4.1",
-    "telegraf": "^4.16.3",
-    "uuid": "^9.0.1"
-  },
   "scripts": {
     "start": "node index.js"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "@upstash/redis": "^1.31.5",
+    "firebase-admin": "^12.1.1",
+    "telegraf": "^4.16.3"
+  }
 }
