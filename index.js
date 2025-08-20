@@ -242,6 +242,7 @@ async function clearAndResendMessages(ctx, userId, buttonId) {
 }
 
 // MODIFIED: تم تعديل الدالة بالكامل لتكتب في مستندات الإحصائيات المقسمة
+// MODIFIED: تم تعديل الدالة بالكامل لتكتب في مستندات الإحصائيات المقسمة
 async function updateButtonStats(buttonId, userId) {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
     const statDocRef = getShardDocRef(buttonId); // تحديد الشارد الصحيح
@@ -252,13 +253,25 @@ async function updateButtonStats(buttonId, userId) {
         await db.runTransaction(async (transaction) => {
             const statDoc = await transaction.get(statDocRef);
             
-            // إذا لم يكن مستند الشارد موجودًا، قم بإنشائه
             if (!statDoc.exists) {
                 transaction.set(statDocRef, { statsMap: {} });
             }
 
             const statsMap = statDoc.data()?.statsMap || {};
             const buttonStats = statsMap[buttonIdStr] || {};
+            
+            // NEW: التحقق من وجود اسم الزر، وإذا لم يكن موجودًا، قم بجلبه
+            let buttonNameToSave = buttonStats.name;
+            if (!buttonNameToSave) {
+                const buttonRef = db.collection('buttons').doc(buttonIdStr);
+                const buttonDoc = await transaction.get(buttonRef);
+                if (buttonDoc.exists) {
+                    buttonNameToSave = buttonDoc.data().text;
+                } else {
+                    buttonNameToSave = 'زر محذوف'; // أو أي اسم افتراضي
+                }
+            }
+            // END NEW
 
             // تحديث الضغطات
             const newTotalClicks = (buttonStats.totalClicks || 0) + 1;
@@ -277,6 +290,7 @@ async function updateButtonStats(buttonId, userId) {
             
             // تحديث البيانات داخل الخريطة الكبيرة
             transaction.update(statDocRef, {
+                [`statsMap.${buttonIdStr}.name`]: buttonNameToSave, // NEW: حفظ الاسم دائمًا
                 [`statsMap.${buttonIdStr}.totalClicks`]: newTotalClicks,
                 [`statsMap.${buttonIdStr}.dailyClicks`]: newDailyClicks,
                 [`statsMap.${buttonIdStr}.totalUsers`]: Array.from(totalUsers),
