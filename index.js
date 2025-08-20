@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM FIREBASE BOT - V55 - CORRECTED V2 BUILD            |
+// |   TELEGRAM FIREBASE BOT - V56 - FIXED BUTTON ADDING           |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -601,13 +601,40 @@ const mainMessageHandler = async (ctx) => {
                 const lastButton = await db.collection('buttons_v2').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
                 const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
                 
-                // MODIFIED: تم تعديل منطق إضافة زر جديد ليشمل إنشاء سجل إحصائي
-                const newButtonRef = await db.collection('buttons_v2').add({ text: newButtonName, parentId: currentPath, order: newOrder, adminOnly: false, isFullWidth: true, hasMessages: false, hasChildren: false, messages: [], children: [] });
+                // NEW: Prepare a batch to perform multiple atomic writes.
+                const batch = db.batch();
+                
+                // 1. Create a new button document
+                const newButtonRef = db.collection('buttons_v2').doc(); // Firestore auto-generates the ID
                 const newButtonId = newButtonRef.id;
 
-                // NEW: إنشاء سجل إحصائي أولي للزر الجديد في الشارد الصحيح
+                const newButtonData = { 
+                    text: newButtonName, 
+                    parentId: currentPath, 
+                    order: newOrder, 
+                    adminOnly: false, 
+                    isFullWidth: true,
+                    hasMessages: false,
+                    hasChildren: false,
+                    messages: [],
+                    children: []
+                };
+                batch.set(newButtonRef, newButtonData);
+
+                // 2. Update the parent's children array
+                if (currentPath !== 'root') {
+                    const parentButtonRef = db.collection('buttons_v2').doc(currentPath.split('/').pop());
+                    const parentDoc = await parentButtonRef.get();
+                    if (parentDoc.exists) {
+                        const children = parentDoc.data().children || [];
+                        children.push({ id: newButtonId, text: newButtonName, order: newOrder, isFullWidth: true });
+                        batch.update(parentButtonRef, { children, hasChildren: true });
+                    }
+                }
+                
+                // 3. Create initial stats record
                 const statDocRef = getShardDocRef(newButtonId);
-                await statDocRef.set({
+                batch.set(statDocRef, {
                     statsMap: {
                         [newButtonId]: {
                             name: newButtonName,
@@ -617,8 +644,10 @@ const mainMessageHandler = async (ctx) => {
                             dailyUsers: {}
                         }
                     }
-                }, { merge: true }); // Merge true to avoid overwriting the whole shard doc
+                }, { merge: true });
 
+                // Commit the batch
+                await batch.commit();
 
                 await db.collection('config').doc('stats').set({ totalButtons: admin.firestore.FieldValue.increment(1) }, { merge: true });
                 await userRef.update({ state: 'EDITING_BUTTONS' });
