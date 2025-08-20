@@ -1,5 +1,5 @@
 // =================================================================
-// |   ملف مخصص لترحيل البيانات القديمة وإصلاح الأسماء في الإحصائيات   |
+// |   ملف مخصص للإصلاح الشامل (ترحيل، إنشاء، وإصلاح الأسماء)       |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -36,25 +36,24 @@ function simpleHash(text) {
     return hash;
 }
 
-// الدالة الرئيسية التي تقوم بعملية الترحيل والإصلاح
-async function runMigrationAndFixScript(ctx) {
-    let reportLines = ['🚀 *بدء عملية ترحيل وإصلاح بيانات الإحصائيات...*'];
+// الدالة الرئيسية التي تقوم بالعملية الشاملة
+async function runFinalFixScript(ctx) {
+    let reportLines = ['🚀 *بدء عملية الإصلاح والترحيل النهائية...*'];
     let totalFixed = 0;
     let totalMigrated = 0;
+    let totalCreated = 0;
 
     try {
         // --- الخطوة 1: جلب كل البيانات اللازمة ---
-        reportLines.push('\n*الخطوة 1: جلب البيانات...*');
+        reportLines.push('\n*الخطوة 1: جلب كل البيانات...*');
         
-        // جلب كل الأزرار وبيانات الإحصائيات القديمة (إن وجدت)
         const buttonsSnapshot = await db.collection('buttons').get();
         const allButtons = {};
         buttonsSnapshot.forEach(doc => {
             allButtons[doc.id] = doc.data();
         });
-        reportLines.push(`- تم العثور على *${Object.keys(allButtons).length}* زر في قاعدة البيانات.`);
+        reportLines.push(`- تم العثور على *${Object.keys(allButtons).length}* زر للمراجعة.`);
 
-        // جلب كل سجلات الإحصائيات الحالية من المستندات المقسمة
         const shardRefs = Array.from({ length: 7 }, (_, i) => db.collection('statistics').doc(`button_stats_shard_${i}`));
         const shardDocs = await db.getAll(...shardRefs);
         const allCurrentStats = {};
@@ -65,9 +64,9 @@ async function runMigrationAndFixScript(ctx) {
         });
         reportLines.push(`- تم العثور على *${Object.keys(allCurrentStats).length}* سجل إحصائيات حالي.`);
 
-        // --- الخطوة 2: تحليل البيانات وتحديد التغييرات ---
+        // --- الخطوة 2: تحليل وتحديد كافة التغييرات المطلوبة ---
         reportLines.push('\n*الخطوة 2: تحليل وتحديد التغييرات...*');
-        const updatesByShard = {}; // { "0": {...}, "1": {...}, ... }
+        const updatesByShard = {};
 
         for (const buttonId in allButtons) {
             const buttonData = allButtons[buttonId];
@@ -78,11 +77,11 @@ async function runMigrationAndFixScript(ctx) {
             }
 
             const currentStat = allCurrentStats[buttonId];
-            const oldStat = buttonData.stats; // الإحصائيات القديمة المخزنة في الزر نفسه
+            const oldStat = buttonData.stats;
 
             // الحالة 1: السجل غير موجود في نظام الإحصائيات الجديد
             if (!currentStat) {
-                // إذا وجدنا بيانات قديمة، نقوم بترحيلها
+                // إذا وجدنا بيانات قديمة، نقوم بـ "ترحيلها"
                 if (oldStat && oldStat.totalClicks > 0) {
                     updatesByShard[correctShardIndex][`statsMap.${buttonId}`] = {
                         name: buttonData.text,
@@ -92,9 +91,20 @@ async function runMigrationAndFixScript(ctx) {
                         dailyUsers: oldStat.dailyUsers || {}
                     };
                     totalMigrated++;
+                } 
+                // إذا لم توجد بيانات قديمة، نقوم بـ "إنشاء" سجل جديد له
+                else {
+                    updatesByShard[correctShardIndex][`statsMap.${buttonId}`] = {
+                        name: buttonData.text,
+                        totalClicks: 0,
+                        totalUsers: [],
+                        dailyClicks: {},
+                        dailyUsers: {}
+                    };
+                    totalCreated++;
                 }
             } 
-            // الحالة 2: السجل موجود ولكن بدون اسم (يحتاج إصلاح)
+            // الحالة 2: السجل موجود ولكن بدون اسم (يحتاج "إصلاح")
             else if (!currentStat.name) {
                 updatesByShard[correctShardIndex][`statsMap.${buttonId}.name`] = buttonData.text;
                 totalFixed++;
@@ -108,7 +118,6 @@ async function runMigrationAndFixScript(ctx) {
             const updates = updatesByShard[shardIndex];
             if (Object.keys(updates).length > 0) {
                 const shardRef = db.collection('statistics').doc(`button_stats_shard_${shardIndex}`);
-                // استخدام set مع merge لإنشاء المستند أو دمجه بأمان
                 await shardRef.set({ statsMap: updates }, { merge: true });
                 reportLines.push(`- ✅ تم تحديث المستند \`button_stats_shard_${shardIndex}\``);
                 shardsUpdatedCount++;
@@ -116,20 +125,20 @@ async function runMigrationAndFixScript(ctx) {
         }
 
         if (shardsUpdatedCount === 0) {
-            reportLines.push('- لا توجد تغييرات مطلوبة. البيانات سليمة.');
+            reportLines.push('- لا توجد تغييرات مطلوبة. البيانات سليمة بالكامل.');
         }
 
-        reportLines.push(`\n\n🎉 *اكتملت العملية بنجاح!*`);
-        reportLines.push(`- إجمالي السجلات التي تم ترحيلها: *${totalMigrated}*`);
-        reportLines.push(`- إجمالي السجلات التي تم إصلاح أسمائها: *${totalFixed}*`);
+        reportLines.push(`\n\n🎉 *اكتملت العملية النهائية بنجاح!*`);
+        reportLines.push(`- السجلات التي تم ترحيلها (بيانات قديمة): *${totalMigrated}*`);
+        reportLines.push(`- السجلات التي تم إنشاؤها (جديدة): *${totalCreated}*`);
+        reportLines.push(`- السجلات التي تم إصلاح أسمائها: *${totalFixed}*`);
 
     } catch (error) {
-        console.error("Error during migration script:", error);
+        console.error("Error during final fix script:", error);
         reportLines.push(`\n\n❌ *حدث خطأ فادح أثناء العملية.*`);
         reportLines.push(`- ${error.message}`);
     }
     
-    // إرسال التقرير النهائي للمشرف
     await ctx.telegram.sendMessage(ctx.chat.id, reportLines.join('\n'), { parse_mode: 'Markdown' });
 }
 
@@ -138,20 +147,20 @@ async function runMigrationAndFixScript(ctx) {
 // =================================================================
 
 bot.start((ctx) => {
-    ctx.reply('أهلاً بك. هذا البوت مخصص لعملية ترحيل وإصلاح بيانات الإحصائيات.\n\nأرسل /startmigration لبدء العملية (للأدمن الرئيسي فقط).');
+    ctx.reply('أهلاً بك. هذا البوت مخصص لعملية الإصلاح والترحيل النهائية لبيانات الإحصائيات.\n\nأرسل /finalfix لبدء العملية (للأدمن الرئيسي فقط).');
 });
 
-bot.command('startmigration', async (ctx) => {
+bot.command('finalfix', async (ctx) => {
     const userId = String(ctx.from.id);
     if (userId !== process.env.SUPER_ADMIN_ID) {
         return ctx.reply('🚫 هذا الأمر مخصص للمشرف الرئيسي فقط.');
     }
 
     try {
-        await ctx.reply('⏳ حسنًا، سأبدأ الآن عملية الترحيل والإصلاح الشاملة. هذه العملية قد تستغرق بعض الوقت... سأرسل لك تقريرًا عند الانتهاء.');
-        await runMigrationAndFixScript(ctx);
+        await ctx.reply('⏳ حسنًا، سأبدأ الآن العملية النهائية. هذه العملية ستضمن أن كل زر له سجل إحصائي صحيح... سأرسل لك تقريرًا عند الانتهاء.');
+        await runFinalFixScript(ctx);
     } catch (error) {
-        console.error('Error triggering migration script:', error);
+        console.error('Error triggering final fix script:', error);
         await ctx.reply('❌ حدث خطأ أثناء محاولة بدء العملية.');
     }
 });
@@ -165,7 +174,7 @@ module.exports = async (req, res) => {
         if (req.method === 'POST' && req.body) {
             await bot.handleUpdate(req.body, res);
         } else {
-            res.status(200).send('Migration & Fix Bot is running.');
+            res.status(200).send('Final Fix & Migration Bot is running.');
         }
     } catch (err) {
         console.error('Error in webhook handler:', err.message);
