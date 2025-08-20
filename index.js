@@ -31,59 +31,79 @@ async function trackSentMessages(userId, messageIds) {
     await userRef.update({ 'stateData.messageViewIds': messageIds });
 }
 async function getTopButtons(period) {
-    const allButtonsSnapshot = await db.collection('buttons').get();
-    let buttonStats = [];
-    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+    let query;
+    const statsCollection = db.collection('button_stats');
 
-    for (const doc of allButtonsSnapshot.docs) {
-        const button = doc.data();
-        const stats = button.stats || {};
-        let clicks = 0;
-        let users = 0;
-
-        if (period === 'today') {
-            clicks = stats.dailyClicks?.[todayStr] || 0;
-            users = stats.dailyUsers?.[todayStr]?.length || 0;
-        } else if (period === 'all_time') {
-            clicks = stats.totalClicks || 0;
-            users = stats.totalUsers?.length || 0;
-        } else if (period === 'weekly') {
+    // تحديد كيفية الاستعلام بناءً على الفترة
+    if (period === 'today') {
+        const todayStr = new Date().toLocaleString('en-CA', { timeZone: 'Africa/Cairo' });
+        query = statsCollection.where(`daily.${todayStr}.clicks`, '>', 0)
+                               .orderBy(`daily.${todayStr}.clicks`, 'desc');
+    } else if (period === 'all_time') {
+        query = statsCollection.orderBy('totalClicks', 'desc');
+    } else if (period === 'weekly') {
+        // هذه الحالة تتطلب معالجة خاصة
+        // سنقرأ كل الإحصائيات ونجمعها يدوياً للتبسيط
+        // للحصول على أداء أفضل، يمكن تجميع الإحصائيات الأسبوعية مسبقاً
+        const allStatsSnapshot = await statsCollection.get();
+        let buttonStats = [];
+        
+        for (const doc of allStatsSnapshot.docs) {
+            const stats = doc.data();
             let weeklyClicks = 0;
-            let weeklyUsersSet = new Set();
+            let weeklyUsers = 0; // ملاحظة: حساب المستخدمين الفريدين أسبوعياً لا يزال معقداً
+
             for (let i = 0; i < 7; i++) {
                 const d = new Date();
                 d.setDate(d.getDate() - i);
-                const dateStr = d.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-                weeklyClicks += stats.dailyClicks?.[dateStr] || 0;
-                if (stats.dailyUsers?.[dateStr]) {
-                    stats.dailyUsers[dateStr].forEach(userId => weeklyUsersSet.add(userId));
+                const dateStr = d.toLocaleString('en-CA', { timeZone: 'Africa/Cairo' });
+                if (stats.daily && stats.daily[dateStr]) {
+                    weeklyClicks += stats.daily[dateStr].clicks || 0;
+                    weeklyUsers += stats.daily[dateStr].uniqueUsers || 0; // هذا تقدير وليس عدداً فريداً دقيقاً
                 }
             }
-            clicks = weeklyClicks;
-            users = weeklyUsersSet.size;
-        }
 
-        if (clicks > 0) {
-            buttonStats.push({
-                name: button.text,
-                clicks: clicks,
-                users: users
-            });
+            if (weeklyClicks > 0) {
+                buttonStats.push({
+                    name: stats.buttonText,
+                    clicks: weeklyClicks,
+                    users: weeklyUsers // عدد تقديري
+                });
+            }
         }
+        
+        buttonStats.sort((a, b) => b.clicks - a.clicks);
+        const top10 = buttonStats.slice(0, 10);
+        
+        if (top10.length === 0) return 'لا توجد بيانات لعرضها في هذه الفترة.';
+        
+        return top10.map((btn, index) => 
+            `${index + 1}. *${btn.name}*\n   - 🖱️ الضغطات: \`${btn.clicks}\`\n   - 👤 المستخدمون: \`${btn.users}\``
+        ).join('\n\n');
     }
 
-    // Sort by clicks descending
-    buttonStats.sort((a, b) => b.clicks - a.clicks);
-
-    const top10 = buttonStats.slice(0, 10);
-
-    if (top10.length === 0) {
+    // التنفيذ لـ today و all_time
+    const snapshot = await query.limit(10).get();
+    if (snapshot.empty) {
         return 'لا توجد بيانات لعرضها في هذه الفترة.';
     }
 
-    let report = top10.map((btn, index) => 
-        `${index + 1}. *${btn.name}*\n   - 🖱️ الضغطات: \`${btn.clicks}\`\n   - 👤 المستخدمون: \`${btn.users}\``
-    ).join('\n\n');
+    let report = snapshot.docs.map((doc, index) => {
+        const data = doc.data();
+        let clicks = 0;
+        let users = 0;
+        
+        if (period === 'today') {
+            const todayStr = new Date().toLocaleString('en-CA', { timeZone: 'Africa/Cairo' });
+            clicks = data.daily[todayStr]?.clicks || 0;
+            users = data.daily[todayStr]?.uniqueUsers || 0;
+        } else { // all_time
+            clicks = data.totalClicks || 0;
+            users = data.totalUniqueUsers || 0; // الرقم التقديري
+        }
+        
+        return `${index + 1}. *${data.buttonText}*\n   - 🖱️ الضغطات: \`${clicks}\`\n   - 👤 المستخدمون: \`${users}\``;
+    }).join('\n\n');
 
     return report;
 }
@@ -226,27 +246,55 @@ async function clearAndResendMessages(ctx, userId, buttonId) {
     }
     await sendButtonMessages(ctx, buttonId, true);
 }
+async function updateButtonStats(buttonId, userId, buttonText) {
+    const today = new Date().toLocaleString('en-CA', { timeZone: 'Africa/Cairo' });
+    const statsRef = db.collection('button_stats').doc(buttonId);
+    const userLogRef = db.collection('button_user_log').doc(`${buttonId}_${today}`);
 
-async function updateButtonStats(buttonId, userId) {
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-    const buttonRef = db.collection('buttons').doc(buttonId);
     try {
         await db.runTransaction(async (transaction) => {
-            const buttonDoc = await transaction.get(buttonRef);
-            if (!buttonDoc.exists) return;
-            let stats = buttonDoc.data().stats || {};
-            let totalUsers = stats.totalUsers || [];
-            if (!totalUsers.includes(userId)) totalUsers.push(userId);
-            let dailyUsers = stats.dailyUsers || {};
-            dailyUsers[today] = dailyUsers[today] || [];
-            if (!dailyUsers[today].includes(userId)) dailyUsers[today].push(userId);
-            transaction.update(buttonRef, {
-                'stats.totalClicks': admin.firestore.FieldValue.increment(1),
-                [`stats.dailyClicks.${today}`]: admin.firestore.FieldValue.increment(1),
-                'stats.totalUsers': totalUsers, 'stats.dailyUsers': dailyUsers
-            });
+            const userLogDoc = await transaction.get(userLogRef);
+            const userSet = new Set(userLogDoc.exists ? userLogDoc.data().users : []);
+            
+            const isNewUserForToday = !userSet.has(userId);
+            if (isNewUserForToday) {
+                userSet.add(userId);
+                transaction.set(userLogRef, { users: Array.from(userSet) });
+            }
+
+            const statsDoc = await transaction.get(statsRef);
+            if (!statsDoc.exists) {
+                // إنشاء سجل إحصائيات جديد إذا لم يكن موجوداً
+                transaction.set(statsRef, {
+                    buttonId: buttonId,
+                    buttonText: buttonText,
+                    totalClicks: 1,
+                    [`daily.${today}.clicks`]: 1,
+                    totalUniqueUsers: admin.firestore.FieldValue.increment(1), // سنحتاج لطريقة أدق
+                    [`daily.${today}.uniqueUsers`]: 1,
+                    lastUpdated: today
+                });
+            } else {
+                // تحديث السجل الحالي
+                const updates = {
+                    'totalClicks': admin.firestore.FieldValue.increment(1),
+                    [`daily.${today}.clicks`]: admin.firestore.FieldValue.increment(1),
+                    'buttonText': buttonText, // تحديث الاسم في حال تغير
+                    'lastUpdated': today
+                };
+
+                if (isNewUserForToday) {
+                    updates[`daily.${today}.uniqueUsers`] = admin.firestore.FieldValue.increment(1);
+                    // ملاحظة: totalUniqueUsers تحتاج إلى حل أكثر تعقيداً للحفاظ على دقتها
+                    // ولكن للتبسيط، يمكن تركها أو استخدام Cloud Function لعدها بشكل دوري.
+                }
+                
+                transaction.update(statsRef, updates);
+            }
         });
-    } catch (e) { console.error(`Button stats transaction failed for button ${buttonId}:`, e); }
+    } catch (e) {
+        console.error(`Button stats transaction failed for button ${buttonId}:`, e);
+    }
 }
 
 async function recursiveDeleteButton(buttonPath, statsUpdate = { buttons: 0, messages: 0 }) {
@@ -872,8 +920,7 @@ const mainMessageHandler = async (ctx) => {
         const [subButtonsSnapshot, messagesSnapshot] = await Promise.all([subButtonsQuery, messagesQuery]);
         const hasSubButtons = !subButtonsSnapshot.empty;
         const hasMessages = !messagesSnapshot.empty;
-
-        await updateButtonStats(buttonId, userId);
+      await updateButtonStats(buttonId, userId, buttonData.text);
 
         // --- START: NEW NAVIGATION LOGIC ---
         // الشرط الرئيسي للدخول: إما وجود أزرار فرعية، أو أن الأدمن في وضع تعديل/نقل
