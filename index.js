@@ -111,7 +111,7 @@ async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = 'âœ
 }
 
 // MODIFIED: This function now reads the nested `children` array to build the keyboard.
-async function generateKeyboard(userId) {
+async function generateKeyboard(userData, currentButtonData = null) {
   try {
     if (!userData) return [[]];
     const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userData;
