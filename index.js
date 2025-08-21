@@ -628,22 +628,24 @@ const mainMessageHandler = async (ctx) => {
             if (state === 'AWAITING_NEW_BUTTON_NAME') {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
                 const newButtonName = ctx.message.text;
+
+                // --- تعديل يبدأ هنا ---
+                const parentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
+                const lastButton = await db.collection('buttons_v2').where('parentId', '==', parentId).orderBy('order', 'desc').limit(1).get();
+                // --- تعديل ينتهي هنا ---
                 
-                const lastButton = await db.collection('buttons_v2').where('parentId', '==', currentPath).orderBy('order', 'desc').limit(1).get();
                 const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
-                
-                // NEW: Prepare a batch to perform multiple atomic writes.
+
                 const batch = db.batch();
                 
-                // 1. Create a new button document
-                const newButtonRef = db.collection('buttons_v2').doc(); // Firestore auto-generates the ID
+                const newButtonRef = db.collection('buttons_v2').doc();
                 const newButtonId = newButtonRef.id;
 
-                const newButtonData = { 
-                    text: newButtonName, 
-                    parentId: currentPath, 
-                    order: newOrder, 
-                    adminOnly: false, 
+                const newButtonData = {
+                    text: newButtonName,
+                    parentId: parentId, // ✅ تم التصحيح هنا
+                    order: newOrder,
+                    adminOnly: false,
                     isFullWidth: true,
                     hasMessages: false,
                     hasChildren: false,
@@ -652,9 +654,9 @@ const mainMessageHandler = async (ctx) => {
                 };
                 batch.set(newButtonRef, newButtonData);
 
-                // 2. Update the parent's children array
-                if (currentPath !== 'root') {
-                    const parentButtonRef = db.collection('buttons_v2').doc(currentPath.split('/').pop());
+                // --- تعديل يبدأ هنا ---
+                if (parentId !== 'root') {
+                    const parentButtonRef = db.collection('buttons_v2').doc(parentId);
                     const parentDoc = await parentButtonRef.get();
                     if (parentDoc.exists) {
                         const children = parentDoc.data().children || [];
@@ -662,6 +664,9 @@ const mainMessageHandler = async (ctx) => {
                         batch.update(parentButtonRef, { children, hasChildren: true });
                     }
                 }
+                // --- تعديل ينتهي هنا ---
+                
+                // ... (rest of the code)
                 
                 // 3. Create initial stats record
                 const statDocRef = getShardDocRef(newButtonId);
@@ -915,12 +920,6 @@ case '✅ النقل إلى هنا':
                  return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى نفس مكانه الحالي.`, Markup.keyboard(await generateKeyboard(userId)).resize());
             }
 
-            // Check for infinite loop by moving into a child
-            const isMovingIntoChild = newParentId !== 'root' && (await db.collection('buttons_v2').doc(newParentId).get()).data().parentId.startsWith(`${oldParentId}/${sourceButtonId}`);
-            if (isMovingIntoChild) {
-                 await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                 return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى داخل أحد فروعه.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-            }
             
             await ctx.reply(`⏳ جاري نقل الزر [${sourceButtonText}] إلى القسم الحالي...`);
             
@@ -1235,7 +1234,9 @@ bot.on('callback_query', async (ctx) => {
         if (action === 'btn') {
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
                 
-                const buttonsSnapshot = await db.collection('buttons_v2').where('parentId', '==', currentPath).orderBy('order').get();
+              
+                const parentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
+                const buttonsSnapshot = await db.collection('buttons_v2').where('parentId', '==', parentId).orderBy('order').get();
                 const buttonList = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
                 
                 let rows = [];
