@@ -350,7 +350,7 @@ const mainMessageHandler = async (ctx) => {
                     const orderResult = await client.query('SELECT COALESCE(MAX("order"), -1) FROM public.messages WHERE button_id = $1', [buttonId]);
                     const newOrder = orderResult.rows[0].coalesce + 1;
                     const query = 'INSERT INTO public.messages (button_id, "order", type, content, caption, entities) VALUES ($1, $2, $3, $4, $5, $6)';
-                    const values = [buttonId, newOrder, msg.type, msg.content, msg.caption, msg.entities];
+                    const values = [buttonId, newOrder, msg.type, msg.content, msg.caption, JSON.stringify(msg.entities)];
                     await client.query(query, values);
                 }
                 
@@ -440,7 +440,7 @@ const mainMessageHandler = async (ctx) => {
                         return ctx.reply('⚠️ الإجراء يتطلب نصًا فقط.');
                     }
                     const query = 'UPDATE public.messages SET content = $1, entities = $2, caption = $3 WHERE id = $4';
-                    const values = [ctx.message.text, ctx.message.entities || [], '', messageId];
+                    const values = [ctx.message.text, JSON.stringify(ctx.message.entities || []), '', messageId];
                     await client.query(query, values);
 
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
@@ -459,7 +459,7 @@ const mainMessageHandler = async (ctx) => {
                     }
                     const newEntities = ctx.message.entities || ctx.message.caption_entities || [];
                     const query = 'UPDATE public.messages SET caption = $1, entities = $2 WHERE id = $3';
-                    const values = [newCaption, newEntities, messageId];
+                    const values = [newCaption, JSON.stringify(newEntities), messageId];
                     await client.query(query, values);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الشرح بنجاح.');
@@ -484,7 +484,7 @@ const mainMessageHandler = async (ctx) => {
                         return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
                     }
                     const query = 'UPDATE public.messages SET type = $1, content = $2, caption = $3, entities = $4 WHERE id = $5';
-                    const values = [type, content, caption, entities, messageId];
+                    const values = [type, content, caption, JSON.stringify(entities), messageId];
                     await client.query(query, values);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم استبدال الملف بنجاح.');
@@ -492,7 +492,7 @@ const mainMessageHandler = async (ctx) => {
                     const maxOrderResult = await client.query('SELECT COALESCE(MAX("order"), -1) AS max_order FROM public.messages WHERE button_id = $1', [buttonId]);
                     const newOrder = maxOrderResult.rows[0].max_order + 1;
                     const query = 'INSERT INTO public.messages (button_id, "order", type, content, caption, entities) VALUES ($1, $2, $3, $4, $5, $6)';
-                    const values = [buttonId, targetOrder !== undefined ? targetOrder : newOrder, type, content, caption, entities];
+                    const values = [buttonId, targetOrder !== undefined ? targetOrder : newOrder, type, content, caption, JSON.stringify(entities)];
                     await client.query(query, values);
                     if (targetOrder !== undefined) {
                         await client.query('UPDATE public.messages SET "order" = "order" + 1 WHERE button_id = $1 AND "order" >= $2 AND id <> (SELECT id FROM public.messages WHERE button_id = $1 AND "order" = $2)', [buttonId, targetOrder]);
@@ -838,7 +838,14 @@ const mainMessageHandler = async (ctx) => {
         }
 
         const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
-        const buttonResult = await client.query('SELECT id, is_full_width, admin_only FROM public.buttons WHERE parent_id IS NOT DISTINCT FROM $1 AND text = $2', [currentParentId, text]);
+        
+        let buttonResult;
+        if (currentParentId === null) {
+            buttonResult = await client.query('SELECT id, is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL AND text = $1', [text]);
+        } else {
+            buttonResult = await client.query('SELECT id, is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 AND text = $2', [currentParentId, text]);
+        }
+        
         const buttonInfo = buttonResult.rows[0];
         const buttonId = buttonInfo?.id;
 
