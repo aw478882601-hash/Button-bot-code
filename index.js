@@ -264,14 +264,19 @@ async function sendButtonMessages(ctx, buttonId, buttonData, inEditMode = false)
     if(inEditMode && ctx.from) await trackSentMessages(String(ctx.from.id), sentMessageIds);
     return messages.length;
 }
-
 async function clearAndResendMessages(ctx, userId, buttonId) {
     const userDoc = await db.collection('users').doc(String(userId)).get();
     const messageIdsToDelete = userDoc.data().stateData?.messageViewIds || [];
     for (const msgId of messageIdsToDelete) {
         await ctx.telegram.deleteMessage(ctx.chat.id, msgId).catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`));
     }
-    await sendButtonMessages(ctx, buttonId, true);
+    
+    // ✅ الحل: نقرأ بيانات الزر قبل استدعاء الدالة
+    const buttonDoc = await db.collection('buttons_v2').doc(buttonId).get();
+    if (buttonDoc.exists) {
+        // ثم نمرر البيانات الكاملة `buttonDoc.data()`
+        await sendButtonMessages(ctx, buttonId, buttonDoc.data(), true);
+    }
 }
 
 // This function remains unchanged as the stats logic is separate.
@@ -950,7 +955,11 @@ const mainMessageHandler = async (ctx) => {
                 if (isAdmin) {
                     const newState = state === 'EDITING_BUTTONS' ? 'NORMAL' : 'EDITING_BUTTONS';
                     await userRef.update({ state: newState, stateData: {} });
-                    return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                    
+                    // ✅ الحل: ننشئ نسخة محدّثة من بيانات المستخدم بالحالة الجديدة
+                    const updatedUserData = { ...userDoc.data(), state: newState };
+                    
+                    return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
                 }
                 break;
             case '📄 تعديل المحتوى':
@@ -958,7 +967,11 @@ const mainMessageHandler = async (ctx) => {
                 if (isAdmin) {
                     const newContentState = state === 'EDITING_CONTENT' ? 'NORMAL' : 'EDITING_CONTENT';
                     await userRef.update({ state: newContentState, stateData: {} });
-                    await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+
+                    // ✅ الحل: نطبق نفس المنطق هنا أيضًا
+                    const updatedUserData = { ...userDoc.data(), state: newContentState };
+
+                    await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
                     if (newContentState === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
                         const buttonId = currentPath.split('/').pop();
                         await clearAndResendMessages(ctx, userId, buttonId);
