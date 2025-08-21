@@ -461,7 +461,7 @@ bot.start(async (ctx) => {
         }
         const settingsDoc = await db.collection('config').doc('settings').get();
         const welcomeMessage = (settingsDoc.exists && settingsDoc.data().welcomeMessage) ? settingsDoc.data().welcomeMessage : 'أهلاً بك في البوت!';
-        await ctx.reply(welcomeMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
+        await ctx.reply(welcomeMessage, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
     } catch (error) { console.error("FATAL ERROR in bot.start:", error, "Update:", ctx.update); }
 });
 
@@ -924,7 +924,8 @@ const mainMessageHandler = async (ctx) => {
                 } else {
                     await userRef.update({ currentPath: 'root', stateData: {} });
                 }
-                return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
+                return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+
 
             case '🔙 رجوع':
                 const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
@@ -933,7 +934,7 @@ const mainMessageHandler = async (ctx) => {
                 } else {
                     await userRef.update({ currentPath: newPath, stateData: {} });
                 }
-                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
 
             case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
@@ -941,7 +942,7 @@ const mainMessageHandler = async (ctx) => {
             case '👑 الإشراف':
                 if (isAdmin && currentPath === 'root') {
                     await userRef.update({ currentPath: 'supervision', stateData: {} });
-                    return ctx.reply('قائمة الإشراف', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    return ctx.reply('قائمة الإشراف', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                 }
                 break;
             case '✏️ تعديل الأزرار':
@@ -949,7 +950,7 @@ const mainMessageHandler = async (ctx) => {
                 if (isAdmin) {
                     const newState = state === 'EDITING_BUTTONS' ? 'NORMAL' : 'EDITING_BUTTONS';
                     await userRef.update({ state: newState, stateData: {} });
-                    return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                    return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                 }
                 break;
             case '📄 تعديل المحتوى':
@@ -957,7 +958,7 @@ const mainMessageHandler = async (ctx) => {
                 if (isAdmin) {
                     const newContentState = state === 'EDITING_CONTENT' ? 'NORMAL' : 'EDITING_CONTENT';
                     await userRef.update({ state: newContentState, stateData: {} });
-                    await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                    await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                     if (newContentState === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
                         const buttonId = currentPath.split('/').pop();
                         await clearAndResendMessages(ctx, userId, buttonId);
@@ -981,7 +982,7 @@ const mainMessageHandler = async (ctx) => {
                         }
                     });
                     await ctx.reply('📝 وضع إضافة الرسائل المتعددة 📝\n\nأرسل أو وجّه الآن كل الرسائل التي تريد إضافتها. عند الانتهاء، اضغط على زر "✅ إنهاء الإضافة".',
-                        Markup.keyboard(await generateKeyboard(userId)).resize()
+                        Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                     );
                 }
                 break;
@@ -1002,14 +1003,14 @@ case '✅ النقل إلى هنا':
             const sourceButtonDoc = await db.collection('buttons_v2').doc(sourceButtonId).get();
             if (!sourceButtonDoc.exists) {
                await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-               return ctx.reply(`❌ خطأ: الزر المصدر غير موجود. تم إلغاء العملية.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+               return ctx.reply(`❌ خطأ: الزر المصدر غير موجود. تم إلغاء العملية.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
             }
             
             const oldParentId = sourceButtonDoc.data().parentId;
             
             if (newParentId === oldParentId) {
                  await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                 return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى نفس مكانه الحالي.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                 return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى نفس مكانه الحالي.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
             }
 
             
@@ -1051,19 +1052,19 @@ case '✅ النقل إلى هنا':
             await batch.commit();
 
             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-            return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
 
         } catch (error) {
             console.error("Move button error in handler:", error.message, { sourceButtonId, newParentId });
             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-            return ctx.reply(`❌ حدث خطأ أثناء نقل الزر. تم إبلاغ المطور.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            return ctx.reply(`❌ حدث خطأ أثناء نقل الزر. تم إبلاغ المطور.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
         }
     }
     break;
             case '❌ إلغاء النقل':
                 if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
                     await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                    return ctx.reply('👍 تم إلغاء عملية النقل.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    return ctx.reply('👍 تم إلغاء عملية النقل.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                 }
                 break;
         }
@@ -1187,7 +1188,7 @@ case '✅ النقل إلى هنا':
                 state: 'AWAITING_DESTINATION_PATH',
                 stateData: { sourceButtonId: buttonId, sourceButtonText: buttonInfo.text }
             });
-            return ctx.reply(`✅ تم اختيار [${buttonInfo.text}].\n\n🚙 الآن، تنقّل بحرية داخل البوت وعندما تصل للمكان المطلوب اضغط على زر "✅ النقل إلى هنا".`, Markup.keyboard(await generateKeyboard(userId)).resize());
+            return ctx.reply(`✅ تم اختيار [${buttonInfo.text}].\n\n🚙 الآن، تنقّل بحرية داخل البوت وعندما تصل للمكان المطلوب اضغط على زر "✅ النقل إلى هنا".`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
         }
 
         if (buttonInfo.adminOnly && !isAdmin) {
@@ -1197,7 +1198,7 @@ case '✅ النقل إلى هنا':
         if (state === 'EDITING_BUTTONS' && isAdmin) {
             if (stateData && stateData.lastClickedButtonId === buttonId) {
                 await userRef.update({ currentPath: `${currentPath}/${buttonId}`, stateData: {} });
-                return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
             } else {
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
                 const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
@@ -1271,7 +1272,7 @@ bot.on('callback_query', async (ctx) => {
 
                 if (!buttonDoc.exists) {
                     await ctx.editMessageText('⚠️ عذرًا، هذا الزر تم حذفه بالفعل.');
-                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                     return ctx.answerCbQuery();
                 }
                 
@@ -1310,7 +1311,7 @@ bot.on('callback_query', async (ctx) => {
                 });
                 
                 await ctx.deleteMessage().catch(()=>{});
-                await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                 return ctx.answerCbQuery('✅ تم الحذف');
             }
         }
@@ -1439,7 +1440,7 @@ bot.on('callback_query', async (ctx) => {
                     await db.collection('users').doc(userId).update({ stateData: {} });
                     await ctx.answerCbQuery('✅ تم');
                     await ctx.deleteMessage().catch(()=>{});
-                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                 } else {
                     await ctx.answerCbQuery('لا يمكن التحريك');
                 }
