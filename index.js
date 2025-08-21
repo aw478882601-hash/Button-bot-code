@@ -86,19 +86,21 @@ async function trackSentMessages(userId, messageIds) {
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية وتوقيت مصر)
+// دالة لتجميع ومعالجة إحصائيات الأزرار (تم إصلاح توقيت اليوم)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
         let whereClause = '';
         let title = '';
 
-        // استخدام توقيت مصر 'Africa/Cairo' في تحديد بداية اليوم والأسبوع
         switch (interval) {
             case 'daily':
-                whereClause = "WHERE l.clicked_at >= (NOW() AT TIME ZONE 'Africa/Cairo')::date";
+                // ✨ تم إصلاح الشرط هنا ليقوم بتحويل وقت الضغطة إلى توقيت مصر قبل المقارنة
+                whereClause = "WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date";
                 title = '*🏆 الأكثر استخداماً (اليوم):*';
                 break;
             case 'weekly':
+                // هذا الشرط كان صحيحًا ولا يحتاج لتعديل
                 whereClause = "WHERE l.clicked_at >= date_trunc('week', NOW() AT TIME ZONE 'Africa/Cairo')";
                 title = '*🏆 الأكثر استخداماً (أسبوعياً):*';
                 break;
@@ -1185,9 +1187,9 @@ bot.on('callback_query', async (ctx) => {
                 return;
             }
            if (subAction === 'stats') {
-                // استخدام توقيت مصر 'Africa/Cairo' في تحديد بداية اليوم
-                const dailyClicksResult = await client.query("SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1 AND clicked_at >= (NOW() AT TIME ZONE 'Africa/Cairo')::date", [buttonId]);
-                const dailyUsersResult = await client.query("SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE button_id = $1 AND clicked_at >= (NOW() AT TIME ZONE 'Africa/Cairo')::date", [buttonId]);
+                // ✨ تم إصلاح الشرط هنا أيضًا
+                const dailyClicksResult = await client.query("SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date", [buttonId]);
+                const dailyUsersResult = await client.query("SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date", [buttonId]);
                 
                 const totalClicksResult = await client.query('SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1', [buttonId]);
                 const totalUsersResult = await client.query('SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE button_id = $1', [buttonId]);
