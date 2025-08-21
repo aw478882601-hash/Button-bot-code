@@ -1172,23 +1172,46 @@ bot.on('callback_query', async (ctx) => {
             if (subAction === 'yes') {
                 await ctx.editMessageText('⏳ جارٍ الحذف...');
                 const buttonToDeleteId = buttonId;
-                const buttonDoc = await db.collection('buttons_v2').doc(buttonToDeleteId).get();
+                const buttonRef = db.collection('buttons_v2').doc(buttonToDeleteId);
+                const buttonDoc = await buttonRef.get();
+
+                if (!buttonDoc.exists) {
+                    await ctx.editMessageText('⚠️ عذرًا، هذا الزر تم حذفه بالفعل.');
+                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    return ctx.answerCbQuery();
+                }
                 
                 const statsRef = db.collection('config').doc('stats');
                 
                 await db.runTransaction(async (transaction) => {
-                     const totalButtons = (buttonDoc.data().children || []).length + 1;
-                     const totalMessages = (buttonDoc.data().messages || []).length;
-                     transaction.set(statsRef, {
+                    const buttonData = buttonDoc.data();
+                    const parentId = buttonData.parentId;
+
+                    // --- الجزء الجديد والمهم: تحديث قائمة الأب ---
+                    if (parentId && parentId !== 'root') {
+                        const parentRef = db.collection('buttons_v2').doc(parentId);
+                        const parentDoc = await transaction.get(parentRef);
+                        if (parentDoc.exists) {
+                            const oldChildren = parentDoc.data().children || [];
+                            const newChildren = oldChildren.filter(child => child.id !== buttonToDeleteId);
+                            transaction.update(parentRef, { children: newChildren });
+                        }
+                    }
+                    // --- نهاية الجزء الجديد ---
+
+                    // الكود القديم الخاص بالإحصائيات والحذف
+                    const totalButtons = (buttonData.children || []).length + 1;
+                    const totalMessages = (buttonData.messages || []).length;
+                    transaction.set(statsRef, {
                         totalButtons: admin.firestore.FieldValue.increment(-totalButtons),
                         totalMessages: admin.firestore.FieldValue.increment(-totalMessages)
-                     }, { merge: true });
+                    }, { merge: true });
 
                     const statDocRef = getShardDocRef(buttonToDeleteId);
                     transaction.update(statDocRef, {
                         [`statsMap.${buttonToDeleteId}`]: admin.firestore.FieldValue.delete()
                     });
-                     transaction.delete(db.collection('buttons_v2').doc(buttonToDeleteId));
+                    transaction.delete(buttonRef);
                 });
                 
                 await ctx.deleteMessage().catch(()=>{});
