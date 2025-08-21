@@ -961,19 +961,25 @@ bot.on('callback_query', async (ctx) => {
     try {
         const userId = String(ctx.from.id);
         const data = ctx.callbackQuery.data;
-        const [action, subAction, buttonId, messageId] = data.split(':');
+        
         const userResult = await client.query('SELECT * FROM public.users WHERE id = $1', [userId]);
         if (userResult.rows.length === 0) return ctx.answerCbQuery('المستخدم غير موجود.');
         const userDoc = userResult.rows[0];
-        if (action === 'user' && subAction === 'reply') {
+
+        const parts = data.split(':');
+        const action = parts[0];
+
+        if (action === 'user' && parts[1] === 'reply') {
             await updateUserState(userId, { state: 'REPLYING_TO_ADMIN' });
             await ctx.answerCbQuery();
             return ctx.reply('أرسل الآن ردك على رسالة المشرف:');
         }
+
         if (!userDoc.is_admin) return ctx.answerCbQuery('غير مصرح لك.', { show_alert: true });
-        const { current_path: currentPath } = userDoc;
-      
-       if (action === 'confirm_delete_button') {
+        
+        if (action === 'confirm_delete_button') {
+            const subAction = parts[1];
+            const buttonId = parts[2];
             if (subAction === 'no') {
                 await ctx.editMessageText('👍 تم إلغاء عملية الحذف.');
                 return ctx.answerCbQuery();
@@ -981,16 +987,16 @@ bot.on('callback_query', async (ctx) => {
 
             if (subAction === 'yes') {
                 await ctx.editMessageText('⏳ جارٍ الحذف...');
-                const buttonToDeleteId = buttonId;
-                
-                await client.query('DELETE FROM public.buttons WHERE id = $1', [buttonToDeleteId]);
+                await client.query('DELETE FROM public.buttons WHERE id = $1', [buttonId]);
                 await ctx.deleteMessage().catch(()=>{});
                 await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 return ctx.answerCbQuery('✅ تم الحذف');
             }
         }
+
         if (action === 'admin') {
-          const [, , targetId] = data.split(':');
+            const subAction = parts[1];
+            const targetId = parts[2];
            if (subAction === 'reply') {
                 await updateUserState(userId, { state: 'AWAITING_ADMIN_REPLY', stateData: { targetUserId: targetId } });
                 await ctx.answerCbQuery();
@@ -1024,8 +1030,12 @@ bot.on('callback_query', async (ctx) => {
                 return ctx.editMessageText('أرسل ID المشرف للحذف:');
             }
         }
+
         if (action === 'btn') {
+            const subAction = parts[1];
+            const buttonId = parts[2];
             await updateUserState(userId, { stateData: {} });
+
             if (subAction === 'rename') {
                 await updateUserState(userId, { state: 'AWAITING_RENAME', stateData: { buttonId: buttonId } });
                 await ctx.answerCbQuery();
@@ -1070,37 +1080,37 @@ bot.on('callback_query', async (ctx) => {
         }
 
         if (action === 'msg') {
-            const messageId = subAction; // تم تغيير طريقة الحصول على messageId
-            const buttonIdFromCb = buttonId; // هذا الآن هو messageId الفعلي
+            const msgAction = parts[1];
+            const messageId = parts[2];
 
-            // سنبحث عن الرسالة والزر الخاص بها
-            const msgResult = await client.query('SELECT *, button_id FROM public.messages WHERE id = $1', [buttonIdFromCb]);
+            const msgResult = await client.query('SELECT *, button_id FROM public.messages WHERE id = $1', [messageId]);
             if (msgResult.rows.length === 0) return ctx.answerCbQuery('الرسالة غير موجودة');
             
             const messageToHandle = msgResult.rows[0];
-            const buttonId = messageToHandle.button_id; // حصلنا على buttonId من قاعدة البيانات
+            const buttonId = messageToHandle.button_id;
 
             const messagesResult = await client.query('SELECT * FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]);
             const messages = messagesResult.rows;
-            const messageIndex = messages.findIndex(msg => msg.id === messageToHandle.id);
+            const messageIndex = messages.findIndex(msg => msg.id === messageId);
+            if (messageIndex === -1) return ctx.answerCbQuery('الرسالة غير موجودة');
 
-            const realSubAction = data.split(':')[1]; // نحصل على الإجراء الحقيقي (up, down, etc.)
-            
-            if (realSubAction === 'delete') {
-                await client.query('DELETE FROM public.messages WHERE id = $1', [messageToHandle.id]);
+            if (msgAction === 'delete') {
+                await client.query('DELETE FROM public.messages WHERE id = $1', [messageId]);
                 await client.query('UPDATE public.messages SET "order" = "order" - 1 WHERE button_id = $1 AND "order" > $2', [buttonId, messages[messageIndex].order]);
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, '🗑️ تم الحذف بنجاح.');
                 return ctx.answerCbQuery();
             }
-            if (realSubAction === 'up' || realSubAction === 'down') {
+            if (msgAction === 'up' || msgAction === 'down') {
                 const currentMessage = messages[messageIndex];
-                const newOrder = realSubAction === 'up' ? currentMessage.order - 1 : currentMessage.order + 1;
+                const newOrder = msgAction === 'up' ? currentMessage.order - 1 : currentMessage.order + 1;
                 const targetMessageResult = await client.query('SELECT id, "order" FROM public.messages WHERE button_id = $1 AND "order" = $2', [buttonId, newOrder]);
                 const targetMessage = targetMessageResult.rows[0];
                 if (targetMessage) {
+                    await client.query('BEGIN'); // Start transaction
                     await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [targetMessage.order, currentMessage.id]);
                     await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [currentMessage.order, targetMessage.id]);
+                    await client.query('COMMIT'); // Commit transaction
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
                     return ctx.answerCbQuery();
@@ -1108,22 +1118,22 @@ bot.on('callback_query', async (ctx) => {
                     return ctx.answerCbQuery('لا يمكن تحريك الرسالة أكثر.');
                 }
             }
-            if (realSubAction === 'edit') {
-                 await updateUserState(userId, { state: 'AWAITING_EDITED_TEXT', stateData: { messageId: messageToHandle.id, buttonId: buttonId } });
+            if (msgAction === 'edit') {
+                 await updateUserState(userId, { state: 'AWAITING_EDITED_TEXT', stateData: { messageId: messageId, buttonId: buttonId } });
                  await ctx.answerCbQuery();
                  return ctx.reply("📝 أرسل أو وجّه المحتوى الجديد (نص فقط):", { reply_markup: { force_reply: true } });
             }
-             if (realSubAction === 'edit_caption') {
-                await updateUserState(userId, { state: 'AWAITING_NEW_CAPTION', stateData: { messageId: messageToHandle.id, buttonId: buttonId } });
+             if (msgAction === 'edit_caption') {
+                await updateUserState(userId, { state: 'AWAITING_NEW_CAPTION', stateData: { messageId: messageId, buttonId: buttonId } });
                 await ctx.answerCbQuery();
                 return ctx.reply("📝 أرسل أو وجّه رسالة تحتوي على الشرح الجديد:", { reply_markup: { force_reply: true } });
             }
-            if (realSubAction === 'replace_file') {
-                await updateUserState(userId, { state: 'AWAITING_REPLACEMENT_FILE', stateData: { messageId: messageToHandle.id, buttonId: buttonId } });
+            if (msgAction === 'replace_file') {
+                await updateUserState(userId, { state: 'AWAITING_REPLACEMENT_FILE', stateData: { messageId: messageId, buttonId: buttonId } });
                 await ctx.answerCbQuery();
                 return ctx.reply("🔄 أرسل أو وجّه الملف الجديد:", { reply_markup: { force_reply: true } });
             }
-            if (realSubAction === 'addnext') {
+            if (msgAction === 'addnext') {
                 const msg = messages[messageIndex];
                 await updateUserState(userId, { state: 'AWAITING_NEW_MESSAGE', stateData: { buttonId, targetOrder: msg.order + 1 } });
                 await ctx.answerCbQuery();
