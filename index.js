@@ -931,15 +931,20 @@ const mainMessageHandler = async (ctx) => {
                 }
                 return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
 
+case '🔙 رجوع': { // تم إضافة أقواس لتنظيم المتغيرات
+    const newPath = /* ... */;
+    await userRef.update({ currentPath: newPath, stateData: {} });
 
-            case '🔙 رجوع':
-                const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
-                if (state === 'AWAITING_DESTINATION_PATH') {
-                    await userRef.update({ currentPath: newPath });
-                } else {
-                    await userRef.update({ currentPath: newPath, stateData: {} });
-                }
-                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+    // ... (أضفنا كود لجلب بيانات الزر الأب)
+    const parentButtonId = newPath === 'root' ? null : newPath.split('/').pop();
+    const parentButtonDoc = parentButtonId ? await db.collection('buttons_v2').doc(parentButtonId).get() : null;
+    
+    // ✅ الحل: ننشئ نسخة محدّثة من بيانات المستخدم بالمسار الجديد
+    const updatedUserData = { ...userDoc.data(), currentPath: newPath };
+    
+    // ونمررها مع بيانات الزر الأب لعرض أزراره بشكل صحيح
+    return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(updatedUserData, parentButtonDoc && parentButtonDoc.exists ? parentButtonDoc.data() : null)).resize());
+}
 
             case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
@@ -951,17 +956,19 @@ const mainMessageHandler = async (ctx) => {
                 }
                 break;
             case '✏️ تعديل الأزرار':
-            case '🚫 إلغاء تعديل الأزرار':
-                if (isAdmin) {
-                    const newState = state === 'EDITING_BUTTONS' ? 'NORMAL' : 'EDITING_BUTTONS';
-                    await userRef.update({ state: newState, stateData: {} });
-                    
-                    // ✅ الحل: ننشئ نسخة محدّثة من بيانات المستخدم بالحالة الجديدة
-                    const updatedUserData = { ...userDoc.data(), state: newState };
-                    
-                    return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
-                }
-                break;
+case '🚫 إلغاء تعديل الأزرار': {
+    if (isAdmin) {
+        const newState = state === 'EDITING_BUTTONS' ? 'NORMAL' : 'EDITING_BUTTONS';
+        await userRef.update({ state: newState, stateData: {} });
+        
+        // ✅ الحل: ننشئ نسخة محدّثة من بيانات المستخدم بالحالة الجديدة
+        const updatedUserData = { ...userDoc.data(), state: newState };
+        
+        // ونمررها لتعرض اسم الزر بالشكل الصحيح (مفعل أو غير مفعل)
+        return ctx.reply(`...`, Markup.keyboard(await generateKeyboard(updatedUserData, currentButtonDoc && currentButtonDoc.exists ? currentButtonDoc.data() : null)).resize());
+    }
+    break;
+}
             case '📄 تعديل المحتوى':
             case '🚫 إلغاء تعديل المحتوى':
                 if (isAdmin) {
@@ -1225,9 +1232,14 @@ case '✅ النقل إلى هنا':
         await updateButtonStats(buttonId, userId);
 
         const canEnter = hasSubButtons || (isAdmin && ['EDITING_CONTENT', 'EDITING_BUTTONS', 'AWAITING_DESTINATION_PATH'].includes(state));
-        
         if (canEnter) {
-            await userRef.update({ currentPath: `${currentPath}/${buttonId}` });
+            // 1. نحدد المسار الجديد الذي سينتقل إليه المستخدم
+            const newPath = `${currentPath}/${buttonId}`;
+            
+            // 2. نقوم بتحديث المسار في قاعدة البيانات
+            await userRef.update({ currentPath: newPath });
+            
+            // 3. نرسل رسائل الزر الذي تم الدخول إليه (لا تغيير هنا)
             await sendButtonMessages(ctx, buttonId, buttonInfo, state === 'EDITING_CONTENT');
             
             let replyText = `أنت الآن في قسم: ${text}`;
@@ -1236,8 +1248,15 @@ case '✅ النقل إلى هنا':
             } else if ((state === 'EDITING_CONTENT' || state === 'EDITING_BUTTONS') && !hasMessages && !hasSubButtons) {
                 replyText = 'هذا الزر فارغ. يمكنك الآن إضافة رسائل أو أزرار فرعية.';
             }
-        const keyboardButtonData = buttonInfo; // الزر الذي تم الدخول إليه
-            await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(userDoc.data(), keyboardButtonData)).resize());
+
+            // 4. ✅ الحل: ننشئ نسخة محدثة من بيانات المستخدم تحتوي على المسار الجديد
+            const updatedUserData = { ...userDoc.data(), currentPath: newPath };
+            const keyboardButtonData = buttonInfo; // بيانات الزر الجديد لعرض أبنائه
+            
+            // 5. نستخدم البيانات المحدثة `updatedUserData` لإنشاء لوحة المفاتيح
+            await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(updatedUserData, keyboardButtonData)).resize());
+
+        }
 
         } else if (hasMessages) {
             // ✅ تعديل: نمرر `buttonInfo` الكاملة
