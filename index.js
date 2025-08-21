@@ -598,7 +598,15 @@ const existingButtonResult = await client.query(queryText, queryValues);
                      await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
                      return ctx.reply('حدث خطأ، لم يتم العثور على الزر المراد تعديله.');
                 }
-                const buttonResult = await client.query('SELECT parent_id FROM public.buttons WHERE id = $1', [buttonIdToRename]);
+                let queryText, queryValues;
+if (parentId) {
+    queryText = 'SELECT id FROM public.buttons WHERE parent_id = $1 AND text = $2 AND id <> $3';
+    queryValues = [parentId, newButtonName, buttonIdToRename];
+} else {
+    queryText = 'SELECT id FROM public.buttons WHERE parent_id IS NULL AND text = $1 AND id <> $2';
+    queryValues = [newButtonName, buttonIdToRename];
+}
+const existingButtonResult = await client.query(queryText, queryValues);
                 const parentId = buttonResult.rows[0]?.parent_id;
 
                 const existingButtonResult = await client.query('SELECT id FROM public.buttons WHERE parent_id ' + (parentId ? '= $1' : 'IS NULL') + ' AND text = $2 AND id <> $3', parentId ? [parentId, newButtonName, buttonIdToRename] : [newButtonName, buttonIdToRename]);
