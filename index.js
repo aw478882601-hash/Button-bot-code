@@ -747,12 +747,14 @@ const mainMessageHandler = async (ctx) => {
         const text = ctx.message.text;
 
         switch (text) {
-            case '🔝 القائمة الرئيسية':
-    await updateUserState(userId, { currentPath: 'root', stateData: {} }); // تم حذف "state: 'NORMAL'"
+           case '🔝 القائمة الرئيسية':
+    // هذا التعديل يقوم فقط بتغيير المسار دون مسح بيانات النقل
+    await updateUserState(userId, { currentPath: 'root' }); 
     return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
-            case '🔙 رجوع':
+           case '🔙 رجوع':
     const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
-    await updateUserState(userId, { currentPath: newPath, stateData: {} }); // تم حذف "state: 'NORMAL'"
+    // هذا التعديل يقوم فقط بالرجوع للخلف دون مسح بيانات النقل
+    await updateUserState(userId, { currentPath: newPath });
     return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '💬 التواصل مع الأدمن':
                 await updateUserState(userId, { state: 'CONTACTING_ADMIN' });
