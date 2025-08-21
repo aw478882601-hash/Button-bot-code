@@ -107,14 +107,15 @@ async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '�
         await ctx.telegram.deleteMessage(ctx.chat.id, msgId).catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`));
     }
     await sendButtonMessages(ctx, buttonId, true);
-    await ctx.reply(confirmationMessage, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+    await ctx.reply(confirmationMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
 }
 
 // MODIFIED: This function now reads the nested `children` array to build the keyboard.
-async function generateKeyboard(userData, currentButtonData = null) {
+async function generateKeyboard(userId) {
   try {
-    if (!userData) return [[]];
-    const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userData;
+    const userDoc = await db.collection('users').doc(String(userId)).get();
+    if (!userDoc.exists) return [[]];
+    const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userDoc.data();
     let keyboardRows = [];
 
     if (state === 'AWAITING_BULK_MESSAGES') {
@@ -141,10 +142,11 @@ async function generateKeyboard(userData, currentButtonData = null) {
         buttonsToRender = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     } else {
         const currentButtonId = currentPath.split('/').pop();
-    if (!currentButtonData || !currentButtonData.children) {
+        const currentButtonDoc = await db.collection('buttons_v2').doc(currentButtonId).get();
+        if (!currentButtonDoc.exists || !currentButtonDoc.data().children) {
              buttonsToRender = [];
         } else {
-             buttonsToRender = currentButtonData.children.sort((a, b) => a.order - b.order);
+             buttonsToRender = currentButtonDoc.data().children.sort((a, b) => a.order - b.order);
         }
     }
     
@@ -201,13 +203,14 @@ async function generateKeyboard(userData, currentButtonData = null) {
 }
 
 // MODIFIED: This function now reads the nested `messages` array.
-async function sendButtonMessages(ctx, buttonId, buttonData, inEditMode = false) {
-    if (!buttonData) {
+async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
+    const buttonDoc = await db.collection('buttons_v2').doc(buttonId).get();
+    if (!buttonDoc.exists) {
         if (ctx.from) await trackSentMessages(String(ctx.from.id), []);
         return 0;
     }
     
-    const messages = buttonData.messages || [];
+    const messages = buttonDoc.data().messages || [];
     const sentMessageIds = [];
 
     if (messages.length === 0 && inEditMode) {
@@ -264,19 +267,14 @@ async function sendButtonMessages(ctx, buttonId, buttonData, inEditMode = false)
     if(inEditMode && ctx.from) await trackSentMessages(String(ctx.from.id), sentMessageIds);
     return messages.length;
 }
+
 async function clearAndResendMessages(ctx, userId, buttonId) {
     const userDoc = await db.collection('users').doc(String(userId)).get();
     const messageIdsToDelete = userDoc.data().stateData?.messageViewIds || [];
     for (const msgId of messageIdsToDelete) {
         await ctx.telegram.deleteMessage(ctx.chat.id, msgId).catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`));
     }
-    
-    // ✅ الحل: نقرأ بيانات الزر قبل استدعاء الدالة
-    const buttonDoc = await db.collection('buttons_v2').doc(buttonId).get();
-    if (buttonDoc.exists) {
-        // ثم نمرر البيانات الكاملة `buttonDoc.data()`
-        await sendButtonMessages(ctx, buttonId, buttonDoc.data(), true);
-    }
+    await sendButtonMessages(ctx, buttonId, true);
 }
 
 // This function remains unchanged as the stats logic is separate.
@@ -466,7 +464,7 @@ bot.start(async (ctx) => {
         }
         const settingsDoc = await db.collection('config').doc('settings').get();
         const welcomeMessage = (settingsDoc.exists && settingsDoc.data().welcomeMessage) ? settingsDoc.data().welcomeMessage : 'أهلاً بك في البوت!';
-        await ctx.reply(welcomeMessage, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+        await ctx.reply(welcomeMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
     } catch (error) { console.error("FATAL ERROR in bot.start:", error, "Update:", ctx.update); }
 });
 
@@ -480,8 +478,6 @@ const mainMessageHandler = async (ctx) => {
         let { currentPath, state, isAdmin, stateData, banned } = userDoc.data();
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await userRef.update({ lastActive: new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }) });
-      const currentButtonId = currentPath.split('/').pop();
-        const currentButtonDoc = currentPath === 'root' ? null : await db.collection('buttons_v2').doc(currentButtonId).get();
 // --- 💡 ابدأ الاستبدال من هنا 💡 ---
         if (state === 'AWAITING_BULK_MESSAGES') {
             const { buttonId, collectedMessages = [] } = stateData;
@@ -489,7 +485,7 @@ const mainMessageHandler = async (ctx) => {
             if (ctx.message && ctx.message.text === '✅ إنهاء الإضافة') {
                 if (collectedMessages.length === 0) {
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    return ctx.reply('تم إلغاء العملية حيث لم يتم إضافة أي رسائل.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                    return ctx.reply('تم إلغاء العملية حيث لم يتم إضافة أي رسائل.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 }
 
                 const buttonRef = db.collection('buttons_v2').doc(buttonId);
@@ -781,7 +777,7 @@ const mainMessageHandler = async (ctx) => {
                 }
 
                 await userRef.update({ state: 'EDITING_BUTTONS' });
-                await ctx.reply(summaryMessage, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                await ctx.reply(summaryMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
             }
 
@@ -809,7 +805,7 @@ const mainMessageHandler = async (ctx) => {
                 });
 
                 await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
             }
             if (state === 'AWAITING_ADMIN_ID_TO_ADD' || state === 'AWAITING_ADMIN_ID_TO_REMOVE') {
@@ -931,21 +927,16 @@ const mainMessageHandler = async (ctx) => {
                 } else {
                     await userRef.update({ currentPath: 'root', stateData: {} });
                 }
-                return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
 
-case '🔙 رجوع': {
-                // This is the full, correct line that was represented by the comment
+            case '🔙 رجوع':
                 const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
-                
-                const updatedStateData = (state === 'AWAITING_DESTINATION_PATH') ? userDoc.data().stateData : {};
-                await userRef.update({ currentPath: newPath, stateData: updatedStateData });
-
-                const parentButtonId = newPath === 'root' ? null : newPath.split('/').pop();
-                const parentButtonDoc = parentButtonId ? await db.collection('buttons_v2').doc(parentButtonId).get() : null;
-                
-                const updatedUserData = { ...userDoc.data(), currentPath: newPath, stateData: updatedStateData };
-                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(updatedUserData, parentButtonDoc && parentButtonDoc.exists ? parentButtonDoc.data() : null)).resize());
-            }
+                if (state === 'AWAITING_DESTINATION_PATH') {
+                    await userRef.update({ currentPath: newPath });
+                } else {
+                    await userRef.update({ currentPath: newPath, stateData: {} });
+                }
+                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
 
             case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
@@ -953,35 +944,23 @@ case '🔙 رجوع': {
             case '👑 الإشراف':
                 if (isAdmin && currentPath === 'root') {
                     await userRef.update({ currentPath: 'supervision', stateData: {} });
-                   const updatedUserData = { ...userDoc.data(), currentPath: newPath };
-
-                    return ctx.reply('قائمة الإشراف', Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
+                    return ctx.reply('قائمة الإشراف', Markup.keyboard(await generateKeyboard(userId)).resize());
                 }
                 break;
             case '✏️ تعديل الأزرار':
-case '🚫 إلغاء تعديل الأزرار': {
-    if (isAdmin) {
-        const newState = state === 'EDITING_BUTTONS' ? 'NORMAL' : 'EDITING_BUTTONS';
-        await userRef.update({ state: newState, stateData: {} });
-        
-        // ✅ الحل: ننشئ نسخة محدّثة من بيانات المستخدم بالحالة الجديدة
-        const updatedUserData = { ...userDoc.data(), state: newState };
-        
-        // ونمررها لتعرض اسم الزر بالشكل الصحيح (مفعل أو غير مفعل)
-        return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(updatedUserData, currentButtonDoc && currentButtonDoc.exists ? currentButtonDoc.data() : null)).resize());
-    }
-    break;
-}
+            case '🚫 إلغاء تعديل الأزرار':
+                if (isAdmin) {
+                    const newState = state === 'EDITING_BUTTONS' ? 'NORMAL' : 'EDITING_BUTTONS';
+                    await userRef.update({ state: newState, stateData: {} });
+                    return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                }
+                break;
             case '📄 تعديل المحتوى':
             case '🚫 إلغاء تعديل المحتوى':
                 if (isAdmin) {
                     const newContentState = state === 'EDITING_CONTENT' ? 'NORMAL' : 'EDITING_CONTENT';
                     await userRef.update({ state: newContentState, stateData: {} });
-
-                    // ✅ الحل: نطبق نفس المنطق هنا أيضًا
-                    const updatedUserData = { ...userDoc.data(), state: newContentState };
-
-                    await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
+                    await ctx.reply(`تم ${newContentState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل المحتوى.`, Markup.keyboard(await generateKeyboard(userId)).resize());
                     if (newContentState === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
                         const buttonId = currentPath.split('/').pop();
                         await clearAndResendMessages(ctx, userId, buttonId);
@@ -1004,10 +983,8 @@ case '🚫 إلغاء تعديل الأزرار': {
                             collectedMessages: [] // مصفوفة فارغة لتجميع الرسائل
                         }
                     });
-                    const updatedUserData = { ...userDoc.data(), state: newState, stateData: newStateData };
-
                     await ctx.reply('📝 وضع إضافة الرسائل المتعددة 📝\n\nأرسل أو وجّه الآن كل الرسائل التي تريد إضافتها. عند الانتهاء، اضغط على زر "✅ إنهاء الإضافة".',
-                        Markup.keyboard(await generateKeyboard(updatedUserData)).resize()
+                        Markup.keyboard(await generateKeyboard(userId)).resize()
                     );
                 }
                 break;
@@ -1028,14 +1005,14 @@ case '✅ النقل إلى هنا':
             const sourceButtonDoc = await db.collection('buttons_v2').doc(sourceButtonId).get();
             if (!sourceButtonDoc.exists) {
                await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-               return ctx.reply(`❌ خطأ: الزر المصدر غير موجود. تم إلغاء العملية.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+               return ctx.reply(`❌ خطأ: الزر المصدر غير موجود. تم إلغاء العملية.`, Markup.keyboard(await generateKeyboard(userId)).resize());
             }
             
             const oldParentId = sourceButtonDoc.data().parentId;
             
             if (newParentId === oldParentId) {
                  await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                 return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى نفس مكانه الحالي.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                 return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى نفس مكانه الحالي.`, Markup.keyboard(await generateKeyboard(userId)).resize());
             }
 
             
@@ -1077,23 +1054,19 @@ case '✅ النقل إلى هنا':
             await batch.commit();
 
             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-            const updatedUserData = { ...userDoc.data(), state: newState };
-        
-        return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
+            return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
 
         } catch (error) {
             console.error("Move button error in handler:", error.message, { sourceButtonId, newParentId });
             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-            return ctx.reply(`❌ حدث خطأ أثناء نقل الزر. تم إبلاغ المطور.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+            return ctx.reply(`❌ حدث خطأ أثناء نقل الزر. تم إبلاغ المطور.`, Markup.keyboard(await generateKeyboard(userId)).resize());
         }
     }
     break;
             case '❌ إلغاء النقل':
                 if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
                     await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                const updatedUserData = { ...userDoc.data(), state: newState };
-
-                    return ctx.reply('👍 تم إلغاء عملية النقل.', Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
+                    return ctx.reply('👍 تم إلغاء عملية النقل.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 }
                 break;
         }
@@ -1191,6 +1164,8 @@ case '✅ النقل إلى هنا':
             }
         }
 
+        const currentButtonId = currentPath.split('/').pop();
+        const currentButtonDoc = currentPath === 'root' ? null : await db.collection('buttons_v2').doc(currentButtonId).get();
         let buttonInfo;
         let buttonId;
 
@@ -1215,26 +1190,18 @@ case '✅ النقل إلى هنا':
                 state: 'AWAITING_DESTINATION_PATH',
                 stateData: { sourceButtonId: buttonId, sourceButtonText: buttonInfo.text }
             });
-            return ctx.reply(`✅ تم اختيار [${buttonInfo.text}].\n\n🚙 الآن، تنقّل بحرية داخل البوت وعندما تصل للمكان المطلوب اضغط على زر "✅ النقل إلى هنا".`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+            return ctx.reply(`✅ تم اختيار [${buttonInfo.text}].\n\n🚙 الآن، تنقّل بحرية داخل البوت وعندما تصل للمكان المطلوب اضغط على زر "✅ النقل إلى هنا".`, Markup.keyboard(await generateKeyboard(userId)).resize());
         }
 
         if (buttonInfo.adminOnly && !isAdmin) {
             return ctx.reply('🚫 عذراً، هذا القسم مخصص للمشرفين فقط.');
         }
 
-  if (state === 'EDITING_BUTTONS' && isAdmin) {
+        if (state === 'EDITING_BUTTONS' && isAdmin) {
             if (stateData && stateData.lastClickedButtonId === buttonId) {
-                // ✅ الحل يبدأ هنا
-                const newPath = `${currentPath}/${buttonId}`;
-                await userRef.update({ currentPath: newPath, stateData: {} });
-
-                // ننشئ نسخة محدثة من بيانات المستخدم بالمسار الجديد
-                const updatedUserData = { ...userDoc.data(), currentPath: newPath, stateData: {} };
-
-                // نستخدم البيانات المحدثة لإنشاء لوحة المفاتيح الصحيحة
-                return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(updatedUserData, buttonInfo)).resize());
+                await userRef.update({ currentPath: `${currentPath}/${buttonId}`, stateData: {} });
+                return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
-                // هذا الجزء يبقى كما هو
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
                 const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
                 return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
@@ -1247,15 +1214,10 @@ case '✅ النقل إلى هنا':
         await updateButtonStats(buttonId, userId);
 
         const canEnter = hasSubButtons || (isAdmin && ['EDITING_CONTENT', 'EDITING_BUTTONS', 'AWAITING_DESTINATION_PATH'].includes(state));
+        
         if (canEnter) {
-            // 1. نحدد المسار الجديد الذي سينتقل إليه المستخدم
-            const newPath = `${currentPath}/${buttonId}`;
-            
-            // 2. نقوم بتحديث المسار في قاعدة البيانات
-            await userRef.update({ currentPath: newPath });
-            
-            // 3. نرسل رسائل الزر الذي تم الدخول إليه (لا تغيير هنا)
-            await sendButtonMessages(ctx, buttonId, buttonInfo, state === 'EDITING_CONTENT');
+            await userRef.update({ currentPath: `${currentPath}/${buttonId}` });
+            await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
             
             let replyText = `أنت الآن في قسم: ${text}`;
             if (state === 'AWAITING_DESTINATION_PATH' && !hasSubButtons && !hasMessages) {
@@ -1263,17 +1225,10 @@ case '✅ النقل إلى هنا':
             } else if ((state === 'EDITING_CONTENT' || state === 'EDITING_BUTTONS') && !hasMessages && !hasSubButtons) {
                 replyText = 'هذا الزر فارغ. يمكنك الآن إضافة رسائل أو أزرار فرعية.';
             }
-
-            // 4. ✅ الحل: ننشئ نسخة محدثة من بيانات المستخدم تحتوي على المسار الجديد
-            const updatedUserData = { ...userDoc.data(), currentPath: newPath };
-            const keyboardButtonData = buttonInfo; // بيانات الزر الجديد لعرض أبنائه
-            
-            // 5. نستخدم البيانات المحدثة `updatedUserData` لإنشاء لوحة المفاتيح
-            await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(updatedUserData, keyboardButtonData)).resize());
+            await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(userId)).resize());
 
         } else if (hasMessages) {
-            // ✅ تعديل: نمرر `buttonInfo` الكاملة
-            await sendButtonMessages(ctx, buttonId, buttonInfo, false);
+            await sendButtonMessages(ctx, buttonId, false);
         } else {
             return ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
@@ -1317,7 +1272,7 @@ bot.on('callback_query', async (ctx) => {
 
                 if (!buttonDoc.exists) {
                     await ctx.editMessageText('⚠️ عذرًا، هذا الزر تم حذفه بالفعل.');
-                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
                     return ctx.answerCbQuery();
                 }
                 
@@ -1356,7 +1311,7 @@ bot.on('callback_query', async (ctx) => {
                 });
                 
                 await ctx.deleteMessage().catch(()=>{});
-                await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 return ctx.answerCbQuery('✅ تم الحذف');
             }
         }
@@ -1485,7 +1440,7 @@ bot.on('callback_query', async (ctx) => {
                     await db.collection('users').doc(userId).update({ stateData: {} });
                     await ctx.answerCbQuery('✅ تم');
                     await ctx.deleteMessage().catch(()=>{});
-                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                    await ctx.reply('تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 } else {
                     await ctx.answerCbQuery('لا يمكن التحريك');
                 }
