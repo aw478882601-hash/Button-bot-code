@@ -462,20 +462,54 @@ const mainMessageHandler = async (ctx) => {
                     return ctx.reply("⚠️ حدث خطأ: لم يتم العثور على الزر. تم إلغاء العملية.");
                 }
 
-                if (state === 'AWAITING_EDITED_TEXT') {
+              if (state === 'AWAITING_EDITED_TEXT') {
                      if (!messageId) {
-                          await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
+                        await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                         return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
                     }
-                    if (!ctx.message.text) {
-                        return ctx.reply('⚠️ الإجراء يتطلب نصًا فقط.');
+                    
+                    // --- ✨ الكود الجديد يبدأ هنا ---
+                    let type, content, caption = '', entities = [];
+                    if (ctx.message.text) { 
+                        type = "text"; 
+                        content = ctx.message.text; 
+                        entities = ctx.message.entities || []; 
+                    } else if (ctx.message.photo) { 
+                        type = "photo"; 
+                        content = ctx.message.photo.pop().file_id;
+                        caption = ctx.message.caption || '';
+                        entities = ctx.message.caption_entities || [];
+                    } else if (ctx.message.video) { 
+                        type = "video"; 
+                        content = ctx.message.video.file_id;
+                        caption = ctx.message.caption || '';
+                        entities = ctx.message.caption_entities || [];
+                    } else if (ctx.message.document) { 
+                        type = "document"; 
+                        content = ctx.message.document.file_id;
+                        caption = ctx.message.caption || '';
+                        entities = ctx.message.caption_entities || [];
+                    } else if (ctx.message.audio) { 
+                        type = "audio"; 
+                        content = ctx.message.audio.file_id;
+                        caption = ctx.message.caption || '';
+                        entities = ctx.message.caption_entities || [];
+                    } else if (ctx.message.voice) { 
+                        type = "voice"; 
+                        content = ctx.message.voice.file_id;
+                        caption = ctx.message.caption || '';
+                        entities = ctx.message.voice.caption_entities || [];
+                    } else { 
+                        return ctx.reply('⚠️ نوع الرسالة غير مدعوم.');
                     }
-                    const query = 'UPDATE public.messages SET content = $1, entities = $2, caption = $3 WHERE id = $4';
-                    const values = [ctx.message.text, JSON.stringify(ctx.message.entities || []), '', messageId];
+
+                    const query = 'UPDATE public.messages SET type = $1, content = $2, caption = $3, entities = $4 WHERE id = $5';
+                    const values = [type, content, caption, JSON.stringify(entities), messageId];
                     await client.query(query, values);
+                    // --- نهاية الكود الجديد ---
 
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
-                    await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث النص بنجاح.');
+                    await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الرسالة بنجاح.');
                     return;
                 }
                 
@@ -1031,10 +1065,12 @@ bot.on('callback_query', async (ctx) => {
             }
         }
 
-        if (action === 'btn') {
+       if (action === 'btn') {
             const subAction = parts[1];
             const buttonId = parts[2];
-            await updateUserState(userId, { stateData: {} });
+            
+            // لا تقم بمسح stateData هنا، فقط عند الإجراءات التي تنهي الوضع
+            // await updateUserState(userId, { stateData: {} });
 
             if (subAction === 'rename') {
                 await updateUserState(userId, { state: 'AWAITING_RENAME', stateData: { buttonId: buttonId } });
@@ -1077,6 +1113,44 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.replyWithHTML(statsMessage);
                 return;
             }
+            
+            // ---  ✨ الجزء الجديد الذي تمت إضافته ---
+            if (['up', 'down', 'left', 'right'].includes(subAction)) {
+                 await ctx.answerCbQuery('⏳ جارٍ تحديث الترتيب...');
+                 const btnToMoveResult = await client.query('SELECT "order", parent_id, is_full_width FROM public.buttons WHERE id = $1', [buttonId]);
+                 if (btnToMoveResult.rows.length === 0) return await ctx.reply('حدث خطأ: الزر غير موجود.');
+                 
+                 const { "order": currentOrder, parent_id: parentId, is_full_width: isFullWidth } = btnToMoveResult.rows[0];
+
+                 let targetOrder;
+                 let swapQuery, values;
+
+                 if (subAction === 'up' || subAction === 'down') {
+                    targetOrder = subAction === 'up' ? currentOrder - 1 : currentOrder + 1;
+                    swapQuery = 'SELECT id FROM public.buttons WHERE parent_id ' + (parentId ? '= $1' : 'IS NULL') + ' AND "order" = $2';
+                    values = parentId ? [parentId, targetOrder] : [targetOrder];
+                 } else { // left or right
+                    if (isFullWidth) return ctx.answerCbQuery('لا يمكن تحريك زر بعرض كامل يمينًا أو يسارًا.', { show_alert: true });
+                     // هذه الخاصية تحتاج منطق أكثر تعقيدًا للتعامل مع الصفوف، سيتم إضافتها لاحقًا
+                     return ctx.answerCbQuery('ميزة التحريك يمين/يسار قيد التطوير.', { show_alert: true });
+                 }
+
+                 const targetButtonResult = await client.query(swapQuery, values);
+                 if (targetButtonResult.rows.length > 0) {
+                     const targetButtonId = targetButtonResult.rows[0].id;
+                     await client.query('BEGIN');
+                     await client.query('UPDATE public.buttons SET "order" = $1 WHERE id = $2', [targetOrder, buttonId]);
+                     await client.query('UPDATE public.buttons SET "order" = $1 WHERE id = $2', [currentOrder, targetButtonId]);
+                     await client.query('COMMIT');
+                     
+                     await ctx.deleteMessage().catch(()=>{});
+                     await ctx.reply('✅ تم تحديث ترتيب الأزرار.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                 } else {
+                     return ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
+                 }
+                 return;
+            }
+            // --- نهاية الجزء المضاف ---
         }
 
         if (action === 'msg') {
@@ -1097,7 +1171,7 @@ bot.on('callback_query', async (ctx) => {
             if (msgAction === 'delete') {
                 await client.query('DELETE FROM public.messages WHERE id = $1', [messageId]);
                 await client.query('UPDATE public.messages SET "order" = "order" - 1 WHERE button_id = $1 AND "order" > $2', [buttonId, messages[messageIndex].order]);
-                await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
+                await updateUserState(userId, { state: 'EDITING_CONTENT' });
                 await refreshAdminView(ctx, userId, buttonId, '🗑️ تم الحذف بنجاح.');
                 return ctx.answerCbQuery();
             }
@@ -1111,7 +1185,7 @@ bot.on('callback_query', async (ctx) => {
                     await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [targetMessage.order, currentMessage.id]);
                     await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [currentMessage.order, targetMessage.id]);
                     await client.query('COMMIT'); // Commit transaction
-                    await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
+                    await updateUserState(userId, { state: 'EDITING_CONTENT' });
                     await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
                     return ctx.answerCbQuery();
                 } else {
