@@ -32,11 +32,41 @@ async function getClient() {
 }
 
 // دالة لتحديث حالة المستخدم وبياناته
+// دالة لتحديث حالة المستخدم وبياناته (نسخة محسّنة)
 async function updateUserState(userId, updates) {
     const client = await getClient();
     try {
-        const query = 'UPDATE public.users SET state = $1, state_data = $2 WHERE id = $3';
-        const values = [updates.state, JSON.stringify(updates.stateData), userId];
+        const fieldsToUpdate = [];
+        const values = [];
+        let paramIndex = 1;
+
+        const keyMapping = {
+            state: 'state',
+            stateData: 'state_data',
+            currentPath: 'current_path'
+            // أضف أي حقول أخرى تحتاجها هنا
+        };
+
+        for (const key in updates) {
+            if (Object.prototype.hasOwnProperty.call(updates, key) && keyMapping[key]) {
+                const dbKey = keyMapping[key];
+                fieldsToUpdate.push(`${dbKey} = $${paramIndex++}`);
+                
+                if (key === 'stateData') {
+                    values.push(JSON.stringify(updates[key]));
+                } else {
+                    values.push(updates[key]);
+                }
+            }
+        }
+
+        if (fieldsToUpdate.length === 0) {
+            return; // لا يوجد شيء لتحديثه
+        }
+
+        values.push(userId); // لإضافته في جملة WHERE
+        const query = `UPDATE public.users SET ${fieldsToUpdate.join(', ')} WHERE id = $${paramIndex}`;
+        
         await client.query(query, values);
     } finally {
         client.release();
