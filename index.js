@@ -748,12 +748,12 @@ const mainMessageHandler = async (ctx) => {
 
         switch (text) {
             case '🔝 القائمة الرئيسية':
-                await updateUserState(userId, { currentPath: 'root', state: 'NORMAL', stateData: {} });
-                return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
+    await updateUserState(userId, { currentPath: 'root', stateData: {} }); // تم حذف "state: 'NORMAL'"
+    return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '🔙 رجوع':
-                const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
-                await updateUserState(userId, { currentPath: newPath, state: 'NORMAL', stateData: {} });
-                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
+    const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
+    await updateUserState(userId, { currentPath: newPath, stateData: {} }); // تم حذف "state: 'NORMAL'"
+    return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '💬 التواصل مع الأدمن':
                 await updateUserState(userId, { state: 'CONTACTING_ADMIN' });
                 return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)... او يمكنك التواصل بشكل مباشر هنا @aw478260');
@@ -1065,7 +1065,8 @@ bot.on('callback_query', async (ctx) => {
             }
         }
 
-       if (action === 'btn') {
+      if (action === 'btn') {
+            await updateUserState(userId, { stateData: {} }); // << قم بإضافة هذا السطر
             const subAction = parts[1];
             const buttonId = parts[2];
             
@@ -1223,7 +1224,7 @@ bot.on('callback_query', async (ctx) => {
                         
                         await client.query('COMMIT'); // حفظ التغييرات
                         
-                        await ctx.deleteMessage().catch(()=>{});
+                        
                         await ctx.reply('✅ تم تحديث ترتيب الأزرار.', Markup.keyboard(await generateKeyboard(userId)).resize());
                     } catch (e) {
                         await client.query('ROLLBACK'); // تراجع في حالة حدوث خطأ
