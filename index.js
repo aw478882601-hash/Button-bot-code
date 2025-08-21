@@ -1325,7 +1325,7 @@ bot.on('callback_query', async (ctx) => {
             if (msgAction === 'edit') {
                  await updateUserState(userId, { state: 'AWAITING_EDITED_TEXT', stateData: { messageId: messageId, buttonId: buttonId } });
                  await ctx.answerCbQuery();
-                 return ctx.reply("📝 أرسل أو وجّه المحتوى الجديد (نص فقط):", { reply_markup: { force_reply: true } });
+                 return ctx.reply("📝 أرسل أو وجّه المحتوى الجديد :", { reply_markup: { force_reply: true } });
             }
              if (msgAction === 'edit_caption') {
                 await updateUserState(userId, { state: 'AWAITING_NEW_CAPTION', stateData: { messageId: messageId, buttonId: buttonId } });
