@@ -1,5 +1,5 @@
 // =================================================================
-// |   TELEGRAM SUPABASE BOT - V56 - FIXED BUTTON ADDING           |
+// |   TELEGRAM SUPABASE BOT - V56 - FINAL VERSION                 |
 // =================================================================
 
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
@@ -23,7 +23,12 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // دالة لجلب اتصال من الـ Pooler
 async function getClient() {
-    return await pool.connect();
+    try {
+        return await pool.connect();
+    } catch (error) {
+        console.error('Failed to get a client from the pool:', error);
+        throw error;
+    }
 }
 
 // دالة لتحديث حالة المستخدم وبياناته
@@ -48,15 +53,14 @@ async function trackSentMessages(userId, messageIds) {
     }
 }
 
-// دالة لتجميع ومعالجة إحصائيات الأزرار (تحتاج لتعديل كبير لتعمل مع Supabase)
+// دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث)
 async function processAndFormatTopButtons() {
-    // هذا الجزء يحتاج لإعادة كتابة كاملة ليتناسب مع هيكل الإحصائيات في Supabase
-    // بما أن الهيكل لم يحدد في الوصف، سنقوم بإنشاء تقرير بسيط مؤقت
-    // يمكن تحسين هذا لاحقاً باستخدام وظائف SQL أو جداول مخصصة للإحصائيات
     const client = await getClient();
     try {
+        // يتم استخدام هذا الاستعلام لجمع الإحصائيات من جدول واحد (button_clicks_log)
+        // إذا كان هذا الجدول غير موجود، يجب إنشاؤه أولاً
         const query = `
-            SELECT b.text, COUNT(l.button_id) as clicks_count
+            SELECT b.text, COUNT(l.button_id) as clicks_count, COUNT(DISTINCT l.user_id) as unique_users
             FROM public.buttons b
             JOIN public.button_clicks_log l ON b.id = l.button_id
             GROUP BY b.text
@@ -70,7 +74,7 @@ async function processAndFormatTopButtons() {
         }
 
         return rows.map((row, index) =>
-            `${index + 1}. *${row.text}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\``
+            `${index + 1}. *${row.text}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\`\n   - 👤 المستخدمون: \`${row.unique_users}\``
         ).join('\n\n');
     } finally {
         client.release();
@@ -251,10 +255,11 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     }
 }
 
-// دالة لتسجيل إحصائيات ضغط الزر (تم تعديلها لتتناسب مع Supabase)
+// دالة لتسجيل إحصائيات ضغط الزر
 async function updateButtonStats(buttonId, userId) {
     const client = await getClient();
     try {
+        // تأكد من وجود جدول button_clicks_log أولاً
         const query = 'INSERT INTO public.button_clicks_log (button_id, user_id) VALUES ($1, $2)';
         const values = [buttonId, userId];
         await client.query(query, values);
@@ -284,7 +289,7 @@ bot.start(async (ctx) => {
             const values = [userId, ctx.chat.id, isAdmin, 'root', 'NORMAL', {}, new Date(), false];
             await client.query(query, values);
             
-            // Notification logic (requires an admins table or similar)
+            // Notification logic (requires a settings table or similar)
             if (adminIds.length > 0) {
                 const totalUsersResult = await client.query('SELECT COUNT(*) FROM public.users');
                 const totalUsers = totalUsersResult.rows[0].count;
@@ -331,7 +336,6 @@ const mainMessageHandler = async (ctx) => {
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
 
-        // --- 💡 ابدأ الاستبدال من هنا 💡 ---
         if (state === 'AWAITING_BULK_MESSAGES') {
             const { buttonId, collectedMessages = [] } = stateData;
 
@@ -381,12 +385,12 @@ const mainMessageHandler = async (ctx) => {
                 type = "audio";
                 content = ctx.message.audio.file_id;
                 caption = ctx.message.caption || '';
-                entities = ctx.message.caption_entities || [];
+                entities = ctx.message.audio.caption_entities || [];
             } else if (ctx.message.voice) {
                 type = "voice";
                 content = ctx.message.voice.file_id;
                 caption = ctx.message.caption || '';
-                entities = ctx.message.caption_entities || [];
+                entities = ctx.message.voice.caption_entities || [];
             } else { 
                 return ctx.reply("⚠️ نوع الرسالة غير مدعوم.");
             }
@@ -398,7 +402,6 @@ const mainMessageHandler = async (ctx) => {
             await ctx.reply(`👍 تمت إضافة الرسالة (${updatedCollectedMessages.length}). أرسل المزيد أو اضغط "إنهاء الإضافة".`);
             return;
         }
-        // --- 🛑 انتهي من الاستبدال هنا 🛑 ---
 
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
             if (state === 'AWAITING_ADMIN_REPLY') {
@@ -835,7 +838,7 @@ const mainMessageHandler = async (ctx) => {
         }
 
         const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
-        const buttonResult = await client.query('SELECT id, is_full_width, admin_only FROM public.buttons WHERE parent_id ' + (currentParentId ? '= $1' : 'IS NULL') + ' AND text = $2', currentParentId ? [currentParentId, text] : [text]);
+        const buttonResult = await client.query('SELECT id, is_full_width, admin_only FROM public.buttons WHERE parent_id IS NOT DISTINCT FROM $1 AND text = $2', [currentParentId, text]);
         const buttonInfo = buttonResult.rows[0];
         const buttonId = buttonInfo?.id;
 
