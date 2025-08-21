@@ -931,20 +931,19 @@ const mainMessageHandler = async (ctx) => {
                 }
                 return ctx.reply('القائمة الرئيسية', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
 
-case '🔙 رجوع': { // تم إضافة أقواس لتنظيم المتغيرات
-    const newPath = /* ... */;
-    await userRef.update({ currentPath: newPath, stateData: {} });
+case '🔙 رجوع': {
+                // This is the full, correct line that was represented by the comment
+                const newPath = currentPath === 'supervision' ? 'root' : (currentPath.split('/').slice(0, -1).join('/') || 'root');
+                
+                const updatedStateData = (state === 'AWAITING_DESTINATION_PATH') ? userDoc.data().stateData : {};
+                await userRef.update({ currentPath: newPath, stateData: updatedStateData });
 
-    // ... (أضفنا كود لجلب بيانات الزر الأب)
-    const parentButtonId = newPath === 'root' ? null : newPath.split('/').pop();
-    const parentButtonDoc = parentButtonId ? await db.collection('buttons_v2').doc(parentButtonId).get() : null;
-    
-    // ✅ الحل: ننشئ نسخة محدّثة من بيانات المستخدم بالمسار الجديد
-    const updatedUserData = { ...userDoc.data(), currentPath: newPath };
-    
-    // ونمررها مع بيانات الزر الأب لعرض أزراره بشكل صحيح
-    return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(updatedUserData, parentButtonDoc && parentButtonDoc.exists ? parentButtonDoc.data() : null)).resize());
-}
+                const parentButtonId = newPath === 'root' ? null : newPath.split('/').pop();
+                const parentButtonDoc = parentButtonId ? await db.collection('buttons_v2').doc(parentButtonId).get() : null;
+                
+                const updatedUserData = { ...userDoc.data(), currentPath: newPath, stateData: updatedStateData };
+                return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(updatedUserData, parentButtonDoc && parentButtonDoc.exists ? parentButtonDoc.data() : null)).resize());
+            }
 
             case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
