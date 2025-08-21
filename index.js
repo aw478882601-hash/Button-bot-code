@@ -953,7 +953,9 @@ case '🔙 رجوع': {
             case '👑 الإشراف':
                 if (isAdmin && currentPath === 'root') {
                     await userRef.update({ currentPath: 'supervision', stateData: {} });
-                    return ctx.reply('قائمة الإشراف', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                   const updatedUserData = { ...userDoc.data(), currentPath: newPath };
+
+                    return ctx.reply('قائمة الإشراف', Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
                 }
                 break;
             case '✏️ تعديل الأزرار':
@@ -966,7 +968,7 @@ case '🚫 إلغاء تعديل الأزرار': {
         const updatedUserData = { ...userDoc.data(), state: newState };
         
         // ونمررها لتعرض اسم الزر بالشكل الصحيح (مفعل أو غير مفعل)
-        return ctx.reply(`...`, Markup.keyboard(await generateKeyboard(updatedUserData, currentButtonDoc && currentButtonDoc.exists ? currentButtonDoc.data() : null)).resize());
+        return ctx.reply(`تم ${newState === 'NORMAL' ? 'إلغاء' : 'تفعيل'} وضع تعديل الأزرار.`, Markup.keyboard(await generateKeyboard(updatedUserData, currentButtonDoc && currentButtonDoc.exists ? currentButtonDoc.data() : null)).resize());
     }
     break;
 }
@@ -1002,9 +1004,11 @@ case '🚫 إلغاء تعديل الأزرار': {
                             collectedMessages: [] // مصفوفة فارغة لتجميع الرسائل
                         }
                     });
+                    const updatedUserData = { ...userDoc.data(), state: newState, stateData: newStateData };
+
                     await ctx.reply('📝 وضع إضافة الرسائل المتعددة 📝\n\nأرسل أو وجّه الآن كل الرسائل التي تريد إضافتها. عند الانتهاء، اضغط على زر "✅ إنهاء الإضافة".',
-                        Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
-                    
+                        Markup.keyboard(await generateKeyboard(updatedUserData)).resize()
+                    );
                 }
                 break;
         
@@ -1073,7 +1077,9 @@ case '✅ النقل إلى هنا':
             await batch.commit();
 
             await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-            return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+            const updatedUserData = { ...userDoc.data(), state: newState };
+        
+        return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
 
         } catch (error) {
             console.error("Move button error in handler:", error.message, { sourceButtonId, newParentId });
@@ -1085,7 +1091,9 @@ case '✅ النقل إلى هنا':
             case '❌ إلغاء النقل':
                 if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
                     await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                    return ctx.reply('👍 تم إلغاء عملية النقل.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                const updatedUserData = { ...userDoc.data(), state: newState };
+
+                    return ctx.reply('👍 تم إلغاء عملية النقل.', Markup.keyboard(await generateKeyboard(updatedUserData)).resize());
                 }
                 break;
         }
@@ -1214,11 +1222,19 @@ case '✅ النقل إلى هنا':
             return ctx.reply('🚫 عذراً، هذا القسم مخصص للمشرفين فقط.');
         }
 
-        if (state === 'EDITING_BUTTONS' && isAdmin) {
+  if (state === 'EDITING_BUTTONS' && isAdmin) {
             if (stateData && stateData.lastClickedButtonId === buttonId) {
-                await userRef.update({ currentPath: `${currentPath}/${buttonId}`, stateData: {} });
-                return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
+                // ✅ الحل يبدأ هنا
+                const newPath = `${currentPath}/${buttonId}`;
+                await userRef.update({ currentPath: newPath, stateData: {} });
+
+                // ننشئ نسخة محدثة من بيانات المستخدم بالمسار الجديد
+                const updatedUserData = { ...userDoc.data(), currentPath: newPath, stateData: {} };
+
+                // نستخدم البيانات المحدثة لإنشاء لوحة المفاتيح الصحيحة
+                return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(updatedUserData, buttonInfo)).resize());
             } else {
+                // هذا الجزء يبقى كما هو
                 await userRef.update({ stateData: { lastClickedButtonId: buttonId } });
                 const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
                 return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
