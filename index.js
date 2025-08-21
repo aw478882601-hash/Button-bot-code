@@ -541,7 +541,7 @@ const mainMessageHandler = async (ctx) => {
             }
             // --- نهاية الجزء المُعدّل ---
 
-            const newMessageObject = { id: Date.now().toString() + Math.random(), type, content, caption, entities, order: 0 };
+            const newMessageObject = { id: `${Date.now()}-${collectedMessages.length}`, type, content, caption, entities, order: 0 };
             const updatedCollectedMessages = [...collectedMessages, newMessageObject];
             
             await userRef.update({ 'stateData.collectedMessages': updatedCollectedMessages });
