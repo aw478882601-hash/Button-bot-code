@@ -1115,40 +1115,125 @@ bot.on('callback_query', async (ctx) => {
             }
             
             // ---  ✨ الجزء الجديد الذي تمت إضافته ---
+         // --- ✨✨✨ الجزء الجديد الخاص بتحريك الأزرار ✨✨✨ ---
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
-                 await ctx.answerCbQuery('⏳ جارٍ تحديث الترتيب...');
-                 const btnToMoveResult = await client.query('SELECT "order", parent_id, is_full_width FROM public.buttons WHERE id = $1', [buttonId]);
-                 if (btnToMoveResult.rows.length === 0) return await ctx.reply('حدث خطأ: الزر غير موجود.');
-                 
-                 const { "order": currentOrder, parent_id: parentId, is_full_width: isFullWidth } = btnToMoveResult.rows[0];
+                // 1. جلب كل الأزرار في نفس المستوى لتحديد الترتيب الحالي
+                const btnToMoveResult = await client.query('SELECT parent_id FROM public.buttons WHERE id = $1', [buttonId]);
+                if (btnToMoveResult.rows.length === 0) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
+                const parentId = btnToMoveResult.rows[0].parent_id;
 
-                 let targetOrder;
-                 let swapQuery, values;
+                const buttonsResult = await client.query(
+                    'SELECT id, "order", is_full_width FROM public.buttons WHERE parent_id ' + (parentId ? '= $1' : 'IS NULL') + ' ORDER BY "order"',
+                    parentId ? [parentId] : []
+                );
+                const buttonList = buttonsResult.rows;
+                
+                // 2. إعادة بناء شكل الأزرار كما يظهر للمستخدم في مصفوفة صفوف
+                let rows = [];
+                let currentRow = [];
+                buttonList.forEach(btn => {
+                    currentRow.push(btn);
+                    if (btn.is_full_width || currentRow.length === 2) {
+                        rows.push(currentRow);
+                        currentRow = [];
+                    }
+                });
+                if (currentRow.length > 0) rows.push(currentRow);
 
-                 if (subAction === 'up' || subAction === 'down') {
-                    targetOrder = subAction === 'up' ? currentOrder - 1 : currentOrder + 1;
-                    swapQuery = 'SELECT id FROM public.buttons WHERE parent_id ' + (parentId ? '= $1' : 'IS NULL') + ' AND "order" = $2';
-                    values = parentId ? [parentId, targetOrder] : [targetOrder];
-                 } else { // left or right
-                    if (isFullWidth) return ctx.answerCbQuery('لا يمكن تحريك زر بعرض كامل يمينًا أو يسارًا.', { show_alert: true });
-                     // هذه الخاصية تحتاج منطق أكثر تعقيدًا للتعامل مع الصفوف، سيتم إضافتها لاحقًا
-                     return ctx.answerCbQuery('ميزة التحريك يمين/يسار قيد التطوير.', { show_alert: true });
-                 }
+                // 3. إيجاد مكان الزر المراد تحريكه (رقم الصف والعمود)
+                let targetRowIndex = -1;
+                let targetColIndex = -1;
+                rows.find((row, rIndex) => {
+                    const cIndex = row.findIndex(b => b.id === buttonId);
+                    if (cIndex !== -1) {
+                        targetRowIndex = rIndex;
+                        targetColIndex = cIndex;
+                        return true;
+                    }
+                    return false;
+                });
 
-                 const targetButtonResult = await client.query(swapQuery, values);
-                 if (targetButtonResult.rows.length > 0) {
-                     const targetButtonId = targetButtonResult.rows[0].id;
-                     await client.query('BEGIN');
-                     await client.query('UPDATE public.buttons SET "order" = $1 WHERE id = $2', [targetOrder, buttonId]);
-                     await client.query('UPDATE public.buttons SET "order" = $1 WHERE id = $2', [currentOrder, targetButtonId]);
-                     await client.query('COMMIT');
-                     
-                     await ctx.deleteMessage().catch(()=>{});
-                     await ctx.reply('✅ تم تحديث ترتيب الأزرار.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                 } else {
-                     return ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
-                 }
-                 return;
+                if (targetRowIndex === -1) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
+                
+                let actionTaken = false;
+
+                // 4. تطبيق منطق التحريك حسب الإجراء المطلوب
+                if (subAction === 'up') {
+                    // زر بنصف عرض يصبح زر بعرض كامل فوق شريكه
+                    if (rows[targetRowIndex].length > 1) { 
+                        const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
+                        const self = rows[targetRowIndex][targetColIndex];
+                        rows.splice(targetRowIndex, 1, [self], [partner]);
+                        actionTaken = true;
+                    // زر بعرض كامل يندمج مع زر آخر بعرض كامل فوقه ليصبحا صفا واحدا
+                    } else if (targetRowIndex > 0) {
+                        const rowAbove = rows[targetRowIndex - 1];
+                        if (rowAbove.length === 1) { 
+                            const buttonAbove = rowAbove[0];
+                            const self = rows[targetRowIndex][0];
+                            rows[targetRowIndex - 1] = [buttonAbove, self];
+                            rows.splice(targetRowIndex, 1);
+                            actionTaken = true;
+                        }
+                    }
+                } else if (subAction === 'down') {
+                    // زر بنصف عرض يصبح زر بعرض كامل تحت شريكه
+                    if (rows[targetRowIndex].length > 1) { 
+                        const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
+                        const self = rows[targetRowIndex][targetColIndex];
+                        rows.splice(targetRowIndex, 1, [partner], [self]);
+                        actionTaken = true;
+                    // زر بعرض كامل يندمج مع زر آخر بعرض كامل تحته
+                    } else if (targetRowIndex < rows.length - 1) {
+                        const rowBelow = rows[targetRowIndex + 1];
+                        if (rowBelow.length === 1) { 
+                            const buttonBelow = rowBelow[0];
+                            const self = rows[targetRowIndex][0];
+                            rows.splice(targetRowIndex, 1);
+                            rows[targetRowIndex] = [self, buttonBelow];
+                            actionTaken = true;
+                        }
+                    }
+                } else if (subAction === 'left' || subAction === 'right') {
+                    // تبديل الأماكن في نفس الصف
+                    if (rows[targetRowIndex].length > 1) {
+                        [rows[targetRowIndex][0], rows[targetRowIndex][1]] = [rows[targetRowIndex][1], rows[targetRowIndex][0]];
+                        actionTaken = true;
+                    }
+                }
+
+                // 5. إذا تم التحريك بنجاح، قم بتحديث قاعدة البيانات
+                if (actionTaken) {
+                    await ctx.answerCbQuery('⏳ جارٍ تحديث الترتيب...');
+                    const newButtonList = rows.flat();
+                    
+                    try {
+                        await client.query('BEGIN'); // بدء transaction
+                        
+                        for (let i = 0; i < newButtonList.length; i++) {
+                            const button = newButtonList[i];
+                            const finalRow = rows.find(r => r.some(b => b.id === button.id));
+                            const newIsFullWidth = finalRow.length === 1;
+                            
+                            await client.query(
+                                'UPDATE public.buttons SET "order" = $1, is_full_width = $2 WHERE id = $3',
+                                [i, newIsFullWidth, button.id]
+                            );
+                        }
+                        
+                        await client.query('COMMIT'); // حفظ التغييرات
+                        
+                        await ctx.deleteMessage().catch(()=>{});
+                        await ctx.reply('✅ تم تحديث ترتيب الأزرار.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    } catch (e) {
+                        await client.query('ROLLBACK'); // تراجع في حالة حدوث خطأ
+                        console.error("Error updating button order:", e);
+                        await ctx.reply('❌ حدث خطأ أثناء تحديث الترتيب.');
+                    }
+                } else {
+                    await ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
+                }
+                return;
             }
             // --- نهاية الجزء المضاف ---
         }
