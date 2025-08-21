@@ -625,69 +625,88 @@ const mainMessageHandler = async (ctx) => {
                 return;
             }
             
-            if (state === 'AWAITING_NEW_BUTTON_NAME') {
-                if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال اسم نصي فقط.');
-                const newButtonName = ctx.message.text;
+           if (state === 'AWAITING_NEW_BUTTON_NAME') {
+                if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال نص يحتوي على أسماء الأزرار.');
 
-                // --- تعديل يبدأ هنا ---
+                // --- 💡 1. قائمة الأسماء المحجوزة ---
+                const reservedNames = [
+                    '🔝 القائمة الرئيسية', '🔙 رجوع', '📄 تعديل المحتوى', '🚫 إلغاء تعديل المحتوى',
+                    '✏️ تعديل الأزرار', '🚫 إلغاء تعديل الأزرار', '👑 الإشراف', '🗣️ رسالة جماعية',
+                    '📊 الإحصائيات', '📝 تعديل رسالة الترحيب', '⚙️ تعديل المشرفين', '🚫 قائمة المحظورين',
+                    '💬 التواصل مع الأدمن', '✅ النقل إلى هنا', '❌ إلغاء النقل', '➕ إضافة زر',
+                    '✂️ نقل زر', '➕ إضافة رسالة'
+                ];
+
+                // --- 💡 2. تقسيم النص إلى أزرار متعددة ---
+                const buttonNames = ctx.message.text.split('\n').map(name => name.trim()).filter(name => name.length > 0);
+
+                if (buttonNames.length === 0) {
+                    return ctx.reply('⚠️ لم يتم العثور على أسماء أزرار صالحة.');
+                }
+                
                 const parentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
-                const lastButton = await db.collection('buttons_v2').where('parentId', '==', parentId).orderBy('order', 'desc').limit(1).get();
-                // --- تعديل ينتهي هنا ---
+                const lastButtonSnapshot = await db.collection('buttons_v2').where('parentId', '==', parentId).orderBy('order', 'desc').limit(1).get();
+                let lastOrder = lastButtonSnapshot.empty ? -1 : lastButtonSnapshot.docs[0].data().order;
                 
-                const newOrder = lastButton.empty ? 0 : lastButton.docs[0].data().order + 1;
-
                 const batch = db.batch();
-                
-                const newButtonRef = db.collection('buttons_v2').doc();
-                const newButtonId = newButtonRef.id;
+                let addedCount = 0;
+                let skippedMessages = [];
 
-                const newButtonData = {
-                    text: newButtonName,
-                    parentId: parentId, // ✅ تم التصحيح هنا
-                    order: newOrder,
-                    adminOnly: false,
-                    isFullWidth: true,
-                    hasMessages: false,
-                    hasChildren: false,
-                    messages: [],
-                    children: []
-                };
-                batch.set(newButtonRef, newButtonData);
+                for (const newButtonName of buttonNames) {
+                    // التحقق من الأسماء المحجوزة
+                    if (reservedNames.includes(newButtonName)) {
+                        skippedMessages.push(`- "${newButtonName}" (اسم محجوز)`);
+                        continue;
+                    }
+                    
+                    // التحقق من عدم وجود زر بنفس الاسم في نفس المستوى
+                    const existingButton = await db.collection('buttons_v2').where('parentId', '==', parentId).where('text', '==', newButtonName).limit(1).get();
+                    if (!existingButton.empty) {
+                        skippedMessages.push(`- "${newButtonName}" (موجود بالفعل)`);
+                        continue;
+                    }
 
-                // --- تعديل يبدأ هنا ---
-                if (parentId !== 'root') {
-                    const parentButtonRef = db.collection('buttons_v2').doc(parentId);
-                    const parentDoc = await parentButtonRef.get();
-                    if (parentDoc.exists) {
-                        const children = parentDoc.data().children || [];
-                        children.push({ id: newButtonId, text: newButtonName, order: newOrder, isFullWidth: true });
-                        batch.update(parentButtonRef, { children, hasChildren: true });
+                    lastOrder++; // زيادة الترتيب لكل زر جديد
+                    addedCount++;
+                    
+                    const newButtonRef = db.collection('buttons_v2').doc();
+                    const newButtonId = newButtonRef.id;
+
+                    const newButtonData = {
+                        text: newButtonName,
+                        parentId: parentId,
+                        order: lastOrder,
+                        adminOnly: false,
+                        isFullWidth: true,
+                        hasMessages: false,
+                        hasChildren: false,
+                        messages: [],
+                        children: []
+                    };
+                    batch.set(newButtonRef, newButtonData);
+                    
+                    // تحديث مصفوفة الأبناء في الأب (إذا لم يكن root)
+                    if (parentId !== 'root') {
+                        const parentRef = db.collection('buttons_v2').doc(parentId);
+                        batch.update(parentRef, { 
+                            children: admin.firestore.FieldValue.arrayUnion({ id: newButtonId, text: newButtonName, order: lastOrder, isFullWidth: true }),
+                            hasChildren: true
+                        });
                     }
                 }
-                // --- تعديل ينتهي هنا ---
-                
-                // ... (rest of the code)
-                
-                // 3. Create initial stats record
-                const statDocRef = getShardDocRef(newButtonId);
-                batch.set(statDocRef, {
-                    statsMap: {
-                        [newButtonId]: {
-                            name: newButtonName,
-                            totalClicks: 0,
-                            dailyClicks: {},
-                            totalUsers: [],
-                            dailyUsers: {}
-                        }
-                    }
-                }, { merge: true });
 
-                // Commit the batch
-                await batch.commit();
+                if (addedCount > 0) {
+                    await batch.commit();
+                    await db.collection('config').doc('stats').set({ totalButtons: admin.firestore.FieldValue.increment(addedCount) }, { merge: true });
+                }
 
-                await db.collection('config').doc('stats').set({ totalButtons: admin.firestore.FieldValue.increment(1) }, { merge: true });
+                let summaryMessage = `✅ تمت إضافة ${addedCount} زر بنجاح.`;
+                if (skippedMessages.length > 0) {
+                    summaryMessage += `\n\n⚠️ تم تخطي الأزرار التالية:\n${skippedMessages.join('\n')}`;
+                }
+
                 await userRef.update({ state: 'EDITING_BUTTONS' });
-                await ctx.reply(`✅ تم إضافة الزر "${newButtonName}" بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                await ctx.reply(summaryMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
                 return;
             }
 
