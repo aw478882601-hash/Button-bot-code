@@ -480,6 +480,8 @@ const mainMessageHandler = async (ctx) => {
         let { currentPath, state, isAdmin, stateData, banned } = userDoc.data();
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await userRef.update({ lastActive: new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }) });
+      const currentButtonId = currentPath.split('/').pop();
+        const currentButtonDoc = currentPath === 'root' ? null : await db.collection('buttons_v2').doc(currentButtonId).get();
 // --- 💡 ابدأ الاستبدال من هنا 💡 ---
         if (state === 'AWAITING_BULK_MESSAGES') {
             const { buttonId, collectedMessages = [] } = stateData;
@@ -1181,8 +1183,6 @@ case '✅ النقل إلى هنا':
             }
         }
 
-        const currentButtonId = currentPath.split('/').pop();
-        const currentButtonDoc = currentPath === 'root' ? null : await db.collection('buttons_v2').doc(currentButtonId).get();
         let buttonInfo;
         let buttonId;
 
