@@ -85,19 +85,21 @@ async function trackSentMessages(userId, messageIds) {
 
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية)
+// دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية وتوقيت مصر)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
         let whereClause = '';
         let title = '';
 
+        // استخدام توقيت مصر 'Africa/Cairo' في تحديد بداية اليوم والأسبوع
         switch (interval) {
             case 'daily':
-                whereClause = "WHERE l.clicked_at >= NOW()::date";
+                whereClause = "WHERE l.clicked_at >= (NOW() AT TIME ZONE 'Africa/Cairo')::date";
                 title = '*🏆 الأكثر استخداماً (اليوم):*';
                 break;
             case 'weekly':
-                whereClause = "WHERE l.clicked_at >= date_trunc('week', NOW())";
+                whereClause = "WHERE l.clicked_at >= date_trunc('week', NOW() AT TIME ZONE 'Africa/Cairo')";
                 title = '*🏆 الأكثر استخداماً (أسبوعياً):*';
                 break;
             default: // all-time
@@ -463,9 +465,23 @@ const mainMessageHandler = async (ctx) => {
                     return ctx.reply('⚠️ حدث خطأ: لم يتم العثور على المستخدم المراد الرد عليه.');
                 }
                 try {
+                    // 1. جلب كل المشرفين بترتيب ثابت لتحديد رقم المشرف
+                    const adminsResult = await client.query("SELECT id FROM public.users WHERE is_admin = true ORDER BY id");
+                    const adminIds = adminsResult.rows.map(row => String(row.id));
+                    
+                    // 2. تحديد رقم المشرف الحالي (index + 1)
+                    const adminIndex = adminIds.indexOf(String(ctx.from.id));
+                    const adminNumber = adminIndex !== -1 ? adminIndex + 1 : 'غير محدد';
+
+                    // 3. إرسال الرد الفعلي للمستخدم
                     await ctx.copyMessage(targetUserId);
-                    const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ الرد على المشرف', `user:reply`) ]] };
-                    await bot.telegram.sendMessage(targetUserId, '✉️ رسالة جديدة من الأدمن.', { reply_markup: replyMarkup });
+
+                    // 4. إنشاء زر رد ورسالة للمستخدم تحمل رقم المشرف
+                    const replyMarkup = { 
+                        inline_keyboard: [[ Markup.button.callback(`✍️ الرد على الأدمن رقم ${adminNumber}`, `user:reply:${ctx.from.id}`) ]] 
+                    };
+                    await bot.telegram.sendMessage(targetUserId, `✉️ رسالة جديدة من الأدمن رقم *${adminNumber}*`, { parse_mode: 'Markdown', reply_markup: replyMarkup });
+
                     await ctx.reply('✅ تم إرسال ردك بنجاح.');
                 } catch (e) {
                     console.error(`Failed to send admin reply to user ${targetUserId}:`, e.message);
@@ -742,7 +758,8 @@ const mainMessageHandler = async (ctx) => {
             }
         }
         
-        if (state === 'CONTACTING_ADMIN' || state === 'REPLYING_TO_ADMIN') {
+        // هذا المقطع للرسالة الأولى فقط (يرسلها للجميع)
+        if (state === 'CONTACTING_ADMIN') {
             const adminsResult = await client.query('SELECT id FROM public.users WHERE is_admin = true');
             const adminIds = adminsResult.rows.map(row => String(row.id));
             if (adminIds.length === 0) {
@@ -750,8 +767,7 @@ const mainMessageHandler = async (ctx) => {
                 return ctx.reply('⚠️ عذراً، لا يوجد مشرفون متاحون حالياً لتلقي رسالتك.');
             }
             const from = ctx.from;
-            const messagePrefix = state === 'REPLYING_TO_ADMIN' ? '📝 <b>رد من مستخدم!</b>' : '👤 <b>رسالة جديدة من مستخدم!</b>';
-            const userDetails = `${messagePrefix}\n\n<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}` + `\n<b>المعرف:</b> @${from.username || 'لا يوجد'}` + `\n<b>ID:</b> <code>${from.id}</code>`;
+            const userDetails = `👤 <b>رسالة جديدة من مستخدم!</b>\n\n<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}` + `\n<b>المعرف:</b> @${from.username || 'لا يوجد'}` + `\n<b>ID:</b> <code>${from.id}</code>`;
             for (const adminId of adminIds) {
                 try {
                     const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ رد', `admin:reply:${from.id}`), Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`) ]] };
@@ -761,6 +777,30 @@ const mainMessageHandler = async (ctx) => {
             }
             await updateUserState(userId, { state: 'NORMAL' });
             await ctx.reply('✅ تم إرسال رسالتك إلى الأدمن بنجاح.');
+            return;
+        }
+
+        // هذا المقطع الجديد لرد المستخدم على أدمن محدد
+        if (state === 'REPLYING_TO_ADMIN') {
+            const { targetAdminId } = stateData;
+            if (!targetAdminId) {
+                await updateUserState(userId, { state: 'NORMAL', stateData: {} });
+                return ctx.reply('⚠️ حدث خطأ، لم يتم تحديد المشرف للرد عليه.');
+            }
+            const from = ctx.from;
+            const userDetails = `📝 <b>رد من مستخدم!</b>\n\n<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}` + `\n<b>المعرف:</b> @${from.username || 'لا يوجد'}` + `\n<b>ID:</b> <code>${from.id}</code>`;
+            
+            try {
+                // إرسال الرد للأدمن المحدد فقط
+                const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ رد', `admin:reply:${from.id}`), Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`) ]] };
+                await bot.telegram.sendMessage(targetAdminId, userDetails, { parse_mode: 'HTML', reply_markup: replyMarkup });
+                await ctx.copyMessage(targetAdminId);
+            } catch (e) {
+                 console.error(`Failed to send reply to admin ${targetAdminId}:`, e);
+            }
+
+            await updateUserState(userId, { state: 'NORMAL', stateData: {} });
+            await ctx.reply('✅ تم إرسال ردك للمشرف بنجاح.');
             return;
         }
 
@@ -1048,9 +1088,12 @@ bot.on('callback_query', async (ctx) => {
         const action = parts[0];
 
         if (action === 'user' && parts[1] === 'reply') {
-            await updateUserState(userId, { state: 'REPLYING_TO_ADMIN' });
+            const targetAdminId = parts[2]; // الحصول على ID الأدمن من الزر
+            
+            // تخزين ID الأدمن للرد عليه تحديداً
+            await updateUserState(userId, { state: 'REPLYING_TO_ADMIN', stateData: { targetAdminId: targetAdminId } });
             await ctx.answerCbQuery();
-            return ctx.reply('أرسل الآن ردك على رسالة المشرف:');
+            return ctx.reply(`أرسل الآن ردك للمشرف المحدد:`);
         }
 
         if (!userDoc.is_admin) return ctx.answerCbQuery('غير مصرح لك.', { show_alert: true });
@@ -1141,19 +1184,24 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.answerCbQuery(`الزر الآن ${adminOnly ? 'للمشرفين فقط' : 'للجميع'}`);
                 return;
             }
-            if (subAction === 'stats') {
+           if (subAction === 'stats') {
+                // استخدام توقيت مصر 'Africa/Cairo' في تحديد بداية اليوم
+                const dailyClicksResult = await client.query("SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1 AND clicked_at >= (NOW() AT TIME ZONE 'Africa/Cairo')::date", [buttonId]);
+                const dailyUsersResult = await client.query("SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE button_id = $1 AND clicked_at >= (NOW() AT TIME ZONE 'Africa/Cairo')::date", [buttonId]);
+                
                 const totalClicksResult = await client.query('SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1', [buttonId]);
-                const totalClicks = totalClicksResult.rows[0].count;
-                const dailyClicksResult = await client.query('SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1 AND clicked_at >= NOW()::date', [buttonId]);
-                const dailyClicks = dailyClicksResult.rows[0].count;
                 const totalUsersResult = await client.query('SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE button_id = $1', [buttonId]);
-                const totalUsers = totalUsersResult.rows[0].count;
-                const dailyUsersResult = await client.query('SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE button_id = $1 AND clicked_at >= NOW()::date', [buttonId]);
+                
+                const dailyClicks = dailyClicksResult.rows[0].count;
                 const dailyUsers = dailyUsersResult.rows[0].count;
+                const totalClicks = totalClicksResult.rows[0].count;
+                const totalUsers = totalUsersResult.rows[0].count;
+
                 const buttonTextResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
                 const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
 
                 const statsMessage = `📊 <b>إحصائيات الزر: ${buttonName}</b>\n\n` + `👆 <b>الضغطات:</b>\n` + `  - اليوم: <code>${dailyClicks}</code>\n` + `  - الكلي: <code>${totalClicks}</code>\n\n` + `👤 <b>المستخدمون:</b>\n` + `  - اليوم: <code>${dailyUsers}</code>\n` + `  - الكلي: <code>${totalUsers}</code>`;
+                
                 await ctx.answerCbQuery();
                 await ctx.replyWithHTML(statsMessage);
                 return;
