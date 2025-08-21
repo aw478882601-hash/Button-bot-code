@@ -940,7 +940,7 @@ const mainMessageHandler = async (ctx) => {
 
             case '💬 التواصل مع الأدمن':
                 await userRef.update({ state: 'CONTACTING_ADMIN' });
-                return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)...');
+                return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)... او يمكنك التواصل بشكل مباشر هنا @aw478260');
             case '👑 الإشراف':
                 if (isAdmin && currentPath === 'root') {
                     await userRef.update({ currentPath: 'supervision', stateData: {} });
@@ -1078,7 +1078,8 @@ case '✅ النقل إلى هنا':
 
                     // --- 1. الإحصائيات العامة ---
                     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-                    const dailyActiveUsers = (await db.collection('users').where('lastActive', '==', todayStr).get()).size;
+                    const activeUsersSnapshot = await db.collection('users').where('lastActive', '==', todayStr).count().get();
+    const dailyActiveUsers = activeUsersSnapshot.data().count;
                     const statsDoc = await db.collection('config').doc('stats').get();
                     const { totalButtons = 0, totalMessages = 0, totalUsers = 0 } = statsDoc.data() || {};
                     const generalStats = `*📊 الإحصائيات العامة:*\n\n` + `👤 المستخدمون: \`${totalUsers}\` (نشط اليوم: \`${dailyActiveUsers}\`)\n` + `🔘 الأزرار: \`${totalButtons}\`\n` + `✉️ الرسائل: \`${totalMessages}\``;
@@ -1106,9 +1107,8 @@ case '✅ النقل إلى هنا':
                     const date = new Date();
                     date.setDate(date.getDate() - 10);
                     const cutoffDate = date.toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-                    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).get();
-                    
-                    const inactiveCount = inactiveSnapshot.size;
+                    const inactiveSnapshot = await db.collection('users').where('lastActive', '<', cutoffDate).count().get();
+    const inactiveCount = inactiveSnapshot.data().count;
                     const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;
 
                     // --- تجميع كل التقارير في رسالة واحدة ---
