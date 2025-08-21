@@ -113,9 +113,8 @@ async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '�
 // MODIFIED: This function now reads the nested `children` array to build the keyboard.
 async function generateKeyboard(userId) {
   try {
-    const userDoc = await db.collection('users').doc(String(userId)).get();
-    if (!userDoc.exists) return [[]];
-    const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userDoc.data();
+    if (!userData) return [[]];
+    const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userData;
     let keyboardRows = [];
 
     if (state === 'AWAITING_BULK_MESSAGES') {
@@ -142,11 +141,10 @@ async function generateKeyboard(userId) {
         buttonsToRender = buttonsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     } else {
         const currentButtonId = currentPath.split('/').pop();
-        const currentButtonDoc = await db.collection('buttons_v2').doc(currentButtonId).get();
-        if (!currentButtonDoc.exists || !currentButtonDoc.data().children) {
+    if (!currentButtonData || !currentButtonData.children) {
              buttonsToRender = [];
         } else {
-             buttonsToRender = currentButtonDoc.data().children.sort((a, b) => a.order - b.order);
+             buttonsToRender = currentButtonData.children.sort((a, b) => a.order - b.order);
         }
     }
     
@@ -204,13 +202,12 @@ async function generateKeyboard(userId) {
 
 // MODIFIED: This function now reads the nested `messages` array.
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
-    const buttonDoc = await db.collection('buttons_v2').doc(buttonId).get();
-    if (!buttonDoc.exists) {
+    if (!buttonData) {
         if (ctx.from) await trackSentMessages(String(ctx.from.id), []);
         return 0;
     }
     
-    const messages = buttonDoc.data().messages || [];
+    const messages = buttonData.messages || [];
     const sentMessageIds = [];
 
     if (messages.length === 0 && inEditMode) {
@@ -1217,7 +1214,7 @@ case '✅ النقل إلى هنا':
         
         if (canEnter) {
             await userRef.update({ currentPath: `${currentPath}/${buttonId}` });
-            await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
+            await sendButtonMessages(ctx, buttonId, buttonInfo, state === 'EDITING_CONTENT');
             
             let replyText = `أنت الآن في قسم: ${text}`;
             if (state === 'AWAITING_DESTINATION_PATH' && !hasSubButtons && !hasMessages) {
@@ -1225,10 +1222,12 @@ case '✅ النقل إلى هنا':
             } else if ((state === 'EDITING_CONTENT' || state === 'EDITING_BUTTONS') && !hasMessages && !hasSubButtons) {
                 replyText = 'هذا الزر فارغ. يمكنك الآن إضافة رسائل أو أزرار فرعية.';
             }
-            await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(userId)).resize());
+        const keyboardButtonData = buttonInfo; // الزر الذي تم الدخول إليه
+            await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(userDoc.data(), keyboardButtonData)).resize());
 
         } else if (hasMessages) {
-            await sendButtonMessages(ctx, buttonId, false);
+            // ✅ تعديل: نمرر `buttonInfo` الكاملة
+            await sendButtonMessages(ctx, buttonId, buttonInfo, false);
         } else {
             return ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
