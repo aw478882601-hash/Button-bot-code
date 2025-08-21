@@ -84,15 +84,33 @@ async function trackSentMessages(userId, messageIds) {
 }
 
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث)
-async function processAndFormatTopButtons() {
+// دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية)
+async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
-        // يتم استخدام هذا الاستعلام لجمع الإحصائيات من جدول واحد (button_clicks_log)
-        // إذا كان هذا الجدول غير موجود، يجب إنشاؤه أولاً
+        let whereClause = '';
+        let title = '';
+
+        switch (interval) {
+            case 'daily':
+                whereClause = "WHERE l.clicked_at >= NOW()::date";
+                title = '*🏆 الأكثر استخداماً (اليوم):*';
+                break;
+            case 'weekly':
+                whereClause = "WHERE l.clicked_at >= date_trunc('week', NOW())";
+                title = '*🏆 الأكثر استخداماً (أسبوعياً):*';
+                break;
+            default: // all-time
+                whereClause = '';
+                title = '*🏆 الأكثر استخداماً (الكلي):*';
+                break;
+        }
+
         const query = `
             SELECT b.text, COUNT(l.button_id) as clicks_count, COUNT(DISTINCT l.user_id) as unique_users
             FROM public.buttons b
             JOIN public.button_clicks_log l ON b.id = l.button_id
+            ${whereClause}
             GROUP BY b.text
             ORDER BY clicks_count DESC
             LIMIT 10;
@@ -100,12 +118,14 @@ async function processAndFormatTopButtons() {
         const { rows } = await client.query(query);
 
         if (rows.length === 0) {
-            return 'لا توجد بيانات لعرضها في هذه الفترة.';
+            return `${title}\nلا توجد بيانات لعرضها في هذه الفترة.`;
         }
 
-        return rows.map((row, index) =>
+        const formattedRows = rows.map((row, index) =>
             `${index + 1}. *${row.text}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\`\n   - 👤 المستخدمون: \`${row.unique_users}\``
         ).join('\n\n');
+
+        return `${title}\n${formattedRows}`;
     } finally {
         client.release();
     }
@@ -287,11 +307,12 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
 }
 
 // دالة لتسجيل إحصائيات ضغط الزر
+// دالة لتسجيل إحصائيات ضغط الزر
 async function updateButtonStats(buttonId, userId) {
     const client = await getClient();
     try {
-        // تأكد من وجود جدول button_clicks_log أولاً
-        const query = 'INSERT INTO public.button_clicks_log (button_id, user_id) VALUES ($1, $2)';
+        // تم إضافة حقل clicked_at لتسجيل وقت الضغطة
+        const query = 'INSERT INTO public.button_clicks_log (button_id, user_id, clicked_at) VALUES ($1, $2, NOW())';
         const values = [buttonId, userId];
         await client.query(query, values);
     } finally {
@@ -849,26 +870,47 @@ const mainMessageHandler = async (ctx) => {
                 case '📊 الإحصائيات': {
                     const waitingMessage = await ctx.reply('⏳ جارٍ تجميع كافة الإحصائيات والتقارير المتقدمة، يرجى الانتظار...');
 
-                    const activeUsersResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active > NOW() - INTERVAL '1 DAY'");
-                    const dailyActiveUsers = activeUsersResult.rows[0].count;
-                    const totalButtonsResult = await client.query('SELECT COUNT(*) FROM public.buttons');
-                    const totalMessagesResult = await client.query('SELECT COUNT(*) FROM public.messages');
-                    const totalUsersResult = await client.query('SELECT COUNT(*) FROM public.users');
+                    // تشغيل جلب جميع الإحصائيات بالتوازي لتحسين السرعة
+                    const [
+                        generalStatsData,
+                        topDaily,
+                        topWeekly,
+                        topAllTime
+                    ] = await Promise.all([
+                        // جلب الإحصائيات العامة
+                        (async () => {
+                            const client = await getClient();
+                            try {
+                                const activeUsersResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active > NOW() - INTERVAL '1 DAY'");
+                                const totalButtonsResult = await client.query('SELECT COUNT(*) FROM public.buttons');
+                                const totalMessagesResult = await client.query('SELECT COUNT(*) FROM public.messages');
+                                const totalUsersResult = await client.query('SELECT COUNT(*) FROM public.users');
+                                const inactiveResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() - INTERVAL '10 DAY'");
+                                return {
+                                    dailyActiveUsers: activeUsersResult.rows[0].count,
+                                    totalButtons: totalButtonsResult.rows[0].count,
+                                    totalMessages: totalMessagesResult.rows[0].count,
+                                    totalUsers: totalUsersResult.rows[0].count,
+                                    inactiveCount: inactiveResult.rows[0].count,
+                                };
+                            } finally {
+                                client.release();
+                            }
+                        })(),
+                        // جلب إحصائيات الأزرار
+                        processAndFormatTopButtons('daily'),
+                        processAndFormatTopButtons('weekly'),
+                        processAndFormatTopButtons('all_time')
+                    ]);
                     
-                    const totalButtons = totalButtonsResult.rows[0].count;
-                    const totalMessages = totalMessagesResult.rows[0].count;
-                    const totalUsers = totalUsersResult.rows[0].count;
+                    const { dailyActiveUsers, totalButtons, totalMessages, totalUsers, inactiveCount } = generalStatsData;
+
                     const generalStats = `*📊 الإحصائيات العامة:*\n\n` + `👤 المستخدمون: \`${totalUsers}\` (نشط اليوم: \`${dailyActiveUsers}\`)\n` + `🔘 الأزرار: \`${totalButtons}\`\n` + `✉️ الرسائل: \`${totalMessages}\``;
-
-                    const topAllTime = await processAndFormatTopButtons();
-
-                    const topButtonsReport = `*🏆 الأكثر استخداماً:*\n${topAllTime}`;
-                    
-                    const inactiveResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() - INTERVAL '10 DAY'");
-                    const inactiveCount = inactiveResult.rows[0].count;
                     const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;
 
-                    const finalReport = `${generalStats}\n\n---\n\n${topButtonsReport}\n\n---\n\n${inactiveUsersReport}`;
+                    // تجميع كل التقارير في رسالة واحدة
+                    const finalReport = `${generalStats}\n\n---\n\n${topDaily}\n\n---\n\n${topWeekly}\n\n---\n\n${topAllTime}\n\n---\n\n${inactiveUsersReport}`;
+                    
                     await ctx.telegram.editMessageText(ctx.chat.id, waitingMessage.message_id, undefined, finalReport, { parse_mode: 'Markdown' });
                     
                     return;
@@ -1207,7 +1249,7 @@ bot.on('callback_query', async (ctx) => {
 
                 // 5. إذا تم التحريك بنجاح، قم بتحديث قاعدة البيانات
                 if (actionTaken) {
-                    await ctx.answerCbQuery('⏳ جارٍ تحديث الترتيب...');
+                    await ctx.answerCbQuery('تم تحديث الترتيب ✔');
                     const newButtonList = rows.flat();
                     
                     try {
