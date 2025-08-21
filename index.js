@@ -1163,7 +1163,7 @@ bot.on('callback_query', async (ctx) => {
         if (!userDoc.data().isAdmin) return ctx.answerCbQuery('غير مصرح لك.', { show_alert: true });
         const { currentPath } = userDoc.data();
       
-        if (action === 'confirm_delete_button') {
+       if (action === 'confirm_delete_button') {
             if (subAction === 'no') {
                 await ctx.editMessageText('👍 تم إلغاء عملية الحذف.');
                 return ctx.answerCbQuery();
@@ -1187,19 +1187,20 @@ bot.on('callback_query', async (ctx) => {
                     const buttonData = buttonDoc.data();
                     const parentId = buttonData.parentId;
 
-                    // --- الجزء الجديد والمهم: تحديث قائمة الأب ---
                     if (parentId && parentId !== 'root') {
                         const parentRef = db.collection('buttons_v2').doc(parentId);
                         const parentDoc = await transaction.get(parentRef);
                         if (parentDoc.exists) {
                             const oldChildren = parentDoc.data().children || [];
                             const newChildren = oldChildren.filter(child => child.id !== buttonToDeleteId);
-                            transaction.update(parentRef, { children: newChildren });
+                            // --- ✅ هذا هو السطر المُعدّل ---
+                            transaction.update(parentRef, { 
+                                children: newChildren, 
+                                hasChildren: newChildren.length > 0 
+                            });
                         }
                     }
-                    // --- نهاية الجزء الجديد ---
 
-                    // الكود القديم الخاص بالإحصائيات والحذف
                     const totalButtons = (buttonData.children || []).length + 1;
                     const totalMessages = (buttonData.messages || []).length;
                     transaction.set(statsRef, {
