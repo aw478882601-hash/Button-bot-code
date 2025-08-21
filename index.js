@@ -1171,7 +1171,7 @@ bot.on('callback_query', async (ctx) => {
             if (msgAction === 'delete') {
                 await client.query('DELETE FROM public.messages WHERE id = $1', [messageId]);
                 await client.query('UPDATE public.messages SET "order" = "order" - 1 WHERE button_id = $1 AND "order" > $2', [buttonId, messages[messageIndex].order]);
-                await updateUserState(userId, { state: 'EDITING_CONTENT' });
+                await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, '🗑️ تم الحذف بنجاح.');
                 return ctx.answerCbQuery();
             }
@@ -1185,7 +1185,7 @@ bot.on('callback_query', async (ctx) => {
                     await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [targetMessage.order, currentMessage.id]);
                     await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [currentMessage.order, targetMessage.id]);
                     await client.query('COMMIT'); // Commit transaction
-                    await updateUserState(userId, { state: 'EDITING_CONTENT' });
+                    await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
                     return ctx.answerCbQuery();
                 } else {
