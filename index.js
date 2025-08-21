@@ -1255,8 +1255,6 @@ case '✅ النقل إلى هنا':
             // 5. نستخدم البيانات المحدثة `updatedUserData` لإنشاء لوحة المفاتيح
             await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(updatedUserData, keyboardButtonData)).resize());
 
-        }
-
         } else if (hasMessages) {
             // ✅ تعديل: نمرر `buttonInfo` الكاملة
             await sendButtonMessages(ctx, buttonId, buttonInfo, false);
