@@ -107,7 +107,7 @@ async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '�
         await ctx.telegram.deleteMessage(ctx.chat.id, msgId).catch(err => console.error(`Could not delete message ${msgId}: ${err.message}`));
     }
     await sendButtonMessages(ctx, buttonId, true);
-    await ctx.reply(confirmationMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
+    await ctx.reply(confirmationMessage, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
 }
 
 // MODIFIED: This function now reads the nested `children` array to build the keyboard.
@@ -482,7 +482,7 @@ const mainMessageHandler = async (ctx) => {
             if (ctx.message && ctx.message.text === '✅ إنهاء الإضافة') {
                 if (collectedMessages.length === 0) {
                     await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
-                    return ctx.reply('تم إلغاء العملية حيث لم يتم إضافة أي رسائل.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    return ctx.reply('تم إلغاء العملية حيث لم يتم إضافة أي رسائل.', Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                 }
 
                 const buttonRef = db.collection('buttons_v2').doc(buttonId);
@@ -774,7 +774,7 @@ const mainMessageHandler = async (ctx) => {
                 }
 
                 await userRef.update({ state: 'EDITING_BUTTONS' });
-                await ctx.reply(summaryMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
+                await ctx.reply(summaryMessage, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                 return;
             }
 
@@ -802,7 +802,7 @@ const mainMessageHandler = async (ctx) => {
                 });
 
                 await userRef.update({ state: 'EDITING_BUTTONS', stateData: {} });
-                await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                await ctx.reply(`✅ تم تعديل اسم الزر إلى "${newButtonName}".`, Markup.keyboard(await generateKeyboard(userDoc.data())).resize());
                 return;
             }
             if (state === 'AWAITING_ADMIN_ID_TO_ADD' || state === 'AWAITING_ADMIN_ID_TO_REMOVE') {
