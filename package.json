@@ -1,16 +1,13 @@
 {
-  "name": "telegram-firebase-redis-bot",
+  "name": "telegram-supabase-bot",
   "version": "1.0.0",
-  "description": "A Telegram bot using Firebase and Upstash Redis for caching.",
+  "description": "A Telegram bot with Supabase backend",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@upstash/redis": "^1.31.5",
-    "firebase-admin": "^12.1.1",
-    "telegraf": "^4.16.3"
+    "pg": "^8.11.3",
+    "telegraf": "^4.15.3"
   }
 }
