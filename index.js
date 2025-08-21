@@ -201,7 +201,7 @@ async function generateKeyboard(userData, currentButtonData = null) {
 }
 
 // MODIFIED: This function now reads the nested `messages` array.
-async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
+async function sendButtonMessages(ctx, buttonId, buttonData, inEditMode = false) {
     if (!buttonData) {
         if (ctx.from) await trackSentMessages(String(ctx.from.id), []);
         return 0;
