@@ -478,7 +478,8 @@ const mainMessageHandler = async (ctx) => {
         let { currentPath, state, isAdmin, stateData, banned } = userDoc.data();
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await userRef.update({ lastActive: new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }) });
-if (state === 'AWAITING_BULK_MESSAGES') {
+// --- 💡 ابدأ الاستبدال من هنا 💡 ---
+        if (state === 'AWAITING_BULK_MESSAGES') {
             const { buttonId, collectedMessages = [] } = stateData;
 
             if (ctx.message && ctx.message.text === '✅ إنهاء الإضافة') {
@@ -490,36 +491,64 @@ if (state === 'AWAITING_BULK_MESSAGES') {
                 const buttonRef = db.collection('buttons_v2').doc(buttonId);
                 const buttonDoc = await buttonRef.get();
                 let existingMessages = buttonDoc.data().messages || [];
-
+                
                 const newMessages = [...existingMessages, ...collectedMessages];
                 newMessages.forEach((msg, i) => msg.order = i);
 
                 await buttonRef.update({ messages: newMessages, hasMessages: true });
                 await db.collection('config').doc('stats').set({ totalMessages: admin.firestore.FieldValue.increment(collectedMessages.length) }, { merge: true });
-
+                
                 await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, `✅ تم إضافة ${collectedMessages.length} رسالة بنجاح.`);
                 return;
             }
 
-            let type, content, caption = ctx.message.caption || '', entities = ctx.message.caption_entities || [];
-            if (ctx.message.text) { type = "text"; content = ctx.message.text; caption = ""; entities = ctx.message.entities || []; }
-            else if (ctx.message.photo) { type = "photo"; content = ctx.message.photo.pop().file_id; }
-            else if (ctx.message.video) { type = "video"; content = ctx.message.video.file_id; }
-            else if (ctx.message.document) { type = "document"; content = ctx.message.document.file_id; }
-            else if (ctx.message.audio) { type = "audio"; content = ctx.message.audio.file_id; }
-            else if (ctx.message.voice) { type = "voice"; content = ctx.message.voice.file_id; }
-            else {
+            // --- ✨ هذا هو الجزء الذي تم تعديله وإصلاحه ✨ ---
+            let type, content, caption, entities;
+
+            if (ctx.message.text) {
+                type = "text";
+                content = ctx.message.text;
+                caption = "";
+                entities = ctx.message.entities || [];
+            } else if (ctx.message.photo) {
+                type = "photo";
+                content = ctx.message.photo.pop().file_id;
+                caption = ctx.message.caption || '';
+                entities = ctx.message.caption_entities || [];
+            } else if (ctx.message.video) {
+                type = "video";
+                content = ctx.message.video.file_id;
+                caption = ctx.message.caption || '';
+                entities = ctx.message.caption_entities || [];
+            } else if (ctx.message.document) {
+                type = "document";
+                content = ctx.message.document.file_id;
+                caption = ctx.message.caption || '';
+                entities = ctx.message.caption_entities || [];
+            } else if (ctx.message.audio) {
+                type = "audio";
+                content = ctx.message.audio.file_id;
+                caption = ctx.message.caption || '';
+                entities = ctx.message.caption_entities || [];
+            } else if (ctx.message.voice) {
+                type = "voice";
+                content = ctx.message.voice.file_id;
+                caption = ctx.message.caption || '';
+                entities = ctx.message.caption_entities || [];
+            } else { 
                 return ctx.reply("⚠️ نوع الرسالة غير مدعوم.");
             }
+            // --- نهاية الجزء المُعدّل ---
 
             const newMessageObject = { id: Date.now().toString() + Math.random(), type, content, caption, entities, order: 0 };
             const updatedCollectedMessages = [...collectedMessages, newMessageObject];
-
+            
             await userRef.update({ 'stateData.collectedMessages': updatedCollectedMessages });
             await ctx.reply(`👍 تمت إضافة الرسالة (${updatedCollectedMessages.length}). أرسل المزيد أو اضغط "إنهاء الإضافة".`);
             return;
         }
+        // --- 🛑 انتهي من الاستبدال هنا 🛑 ---
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
             
             if (state === 'AWAITING_ADMIN_REPLY') {
