@@ -119,7 +119,9 @@ async function generateKeyboard(userId) {
     if (!userDoc.exists) return [[]];
     const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userDoc.data();
     let keyboardRows = [];
-
+    if (state === 'AWAITING_BULK_MESSAGES') {
+        return [['✅ إنهاء الإضافة']];
+    }
     if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
         keyboardRows.unshift(['✅ النقل إلى هنا', '❌ إلغاء النقل']);
     }
@@ -477,7 +479,93 @@ const mainMessageHandler = async (ctx) => {
         let { currentPath, state, isAdmin, stateData, banned } = userDoc.data();
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await userRef.update({ lastActive: new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }) });
+      if (state === 'AWAITING_BULK_MESSAGES') {
 
+            const { buttonId, collectedMessages = [] } = stateData;
+
+
+
+            if (ctx.message && ctx.message.text === '✅ إنهاء الإضافة') {
+
+                if (collectedMessages.length === 0) {
+
+                    await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+
+                    return ctx.reply('تم إلغاء العملية حيث لم يتم إضافة أي رسائل.', Markup.keyboard(await generateKeyboard(userId)).resize());
+
+                }
+
+
+
+                const buttonRef = db.collection('buttons_v2').doc(buttonId);
+
+                const buttonDoc = await buttonRef.get();
+
+                let existingMessages = buttonDoc.data().messages || [];
+
+                
+
+                // إضافة الرسائل المجمعة إلى الرسائل الحالية
+
+                const newMessages = [...existingMessages, ...collectedMessages];
+
+                newMessages.forEach((msg, i) => msg.order = i); // إعادة ترتيب الكل
+
+
+
+                await buttonRef.update({ messages: newMessages, hasMessages: true });
+
+                await db.collection('config').doc('stats').set({ totalMessages: admin.firestore.FieldValue.increment(collectedMessages.length) }, { merge: true });
+
+                
+
+                await userRef.update({ state: 'EDITING_CONTENT', stateData: {} });
+
+                await refreshAdminView(ctx, userId, buttonId, `✅ تم إضافة ${collectedMessages.length} رسالة بنجاح.`);
+
+                return;
+
+            }
+
+
+
+            // تجميع الرسائل
+
+            let type, content, caption = ctx.message.caption || '', entities = ctx.message.caption_entities || [];
+
+            if (ctx.message.text) { type = "text"; content = ctx.message.text; caption = ""; entities = ctx.message.entities || []; }
+
+            else if (ctx.message.photo) { type = "photo"; content = ctx.message.photo.pop().file_id; }
+
+            else if (ctx.message.video) { type = "video"; content = ctx.message.video.file_id; }
+
+            else if (ctx.message.document) { type = "document"; content = ctx.message.document.file_id; }
+
+            else if (ctx.message.audio) { type = "audio"; content = ctx.message.audio.file_id; }
+
+            else if (ctx.message.voice) { type = "voice"; content = ctx.message.voice.file_id; }
+
+            else { 
+
+                return ctx.reply("⚠️ نوع الرسالة غير مدعوم.");
+
+            }
+
+
+
+            const newMessageObject = { id: Date.now().toString() + Math.random(), type, content, caption, entities, order: 0 };
+
+            const updatedCollectedMessages = [...collectedMessages, newMessageObject];
+
+            
+
+            await userRef.update({ 'stateData.collectedMessages': updatedCollectedMessages });
+
+            await ctx.reply(`👍 تمت إضافة الرسالة (${updatedCollectedMessages.length}). أرسل المزيد أو اضغط "إنهاء الإضافة".`);
+
+            return;
+
+        }
         if (isAdmin && state !== 'NORMAL' && state !== 'EDITING_BUTTONS' && state !== 'EDITING_CONTENT') {
             
             if (state === 'AWAITING_ADMIN_REPLY') {
@@ -905,12 +993,16 @@ const mainMessageHandler = async (ctx) => {
                 break;
             case '➕ إضافة رسالة':
                 if (isAdmin && state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
-                    await userRef.update({ 
-                        state: 'AWAITING_NEW_MESSAGE',
-                        stateData: { buttonId: currentPath.split('/').pop() }
+                await userRef.update({ 
+                        state: 'AWAITING_BULK_MESSAGES', // حالة جديدة
+                        stateData: { 
+                            buttonId: currentPath.split('/').pop(),
+                            collectedMessages: [] // مصفوفة لتجميع الرسائل
+                        }
                     });
-                    return ctx.reply('📝 أرسل أو وجّه الرسالة الجديدة:', { reply_markup: { force_reply: true } });
-                }
+                    await ctx.reply('📝 وضع إضافة الرسائل المتعددة 📝\n\nأرسل أو وجّه الآن كل الرسائل التي تريد إضافتها. عند الانتهاء، اضغط على زر "✅ إنهاء الإضافة".', 
+                        Markup.keyboard(await generateKeyboard(userId)).resize()
+                    )
                 break;
         
        case '✂️ نقل زر':
