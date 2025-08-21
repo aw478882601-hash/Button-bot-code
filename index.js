@@ -111,21 +111,21 @@ async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '�
 }
 
 // MODIFIED: This function now reads the nested `children` array to build the keyboard.
-// MODIFIED: This function now correctly handles the 'root' path.
-// MODIFIED: This function now correctly handles the 'root' path.
 async function generateKeyboard(userId) {
   try {
     const userDoc = await db.collection('users').doc(String(userId)).get();
     if (!userDoc.exists) return [[]];
     const { isAdmin, currentPath = 'root', state = 'NORMAL' } = userDoc.data();
     let keyboardRows = [];
-if (state === 'AWAITING_BULK_MESSAGES') {
+
+    if (state === 'AWAITING_BULK_MESSAGES') {
         return [['✅ إنهاء الإضافة']];
+    }
+
     if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
         keyboardRows.unshift(['✅ النقل إلى هنا', '❌ إلغاء النقل']);
     }
     
-    // Admin supervision path has a fixed keyboard.
     if (currentPath === 'supervision') {
         keyboardRows = [
             ['📊 الإحصائيات', '🗣️ رسالة جماعية'],
