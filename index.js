@@ -554,20 +554,19 @@ const mainMessageHandler = async (ctx) => {
                         skippedMessages.push(`- "${newButtonName}" (اسم محجوز)`);
                         continue;
                     }
-                    
-                    + let queryText, queryValues;
-+
-+ if (parentId) {
-+     // الحالة التي يكون فيها parentId موجوداً
-+     queryText = 'SELECT id FROM public.buttons WHERE parent_id = $1 AND text = $2';
-+     queryValues = [parentId, newButtonName];
-+ } else {
-+     // الحالة التي يكون فيها parentId غير موجود (القائمة الرئيسية)
-+     queryText = 'SELECT id FROM public.buttons WHERE parent_id IS NULL AND text = $1';
-+     queryValues = [newButtonName];
-+ }
-+
-+ const existingButtonResult = await client.query(queryText, queryValues);
+                    let queryText, queryValues;
+
+if (parentId) {
+    // الحالة التي يكون فيها parentId موجوداً
+    queryText = 'SELECT id FROM public.buttons WHERE parent_id = $1 AND text = $2';
+    queryValues = [parentId, newButtonName];
+} else {
+    // الحالة التي يكون فيها parentId غير موجود (القائمة الرئيسية)
+    queryText = 'SELECT id FROM public.buttons WHERE parent_id IS NULL AND text = $1';
+    queryValues = [newButtonName];
+}
+
+const existingButtonResult = await client.query(queryText, queryValues);
                     if (existingButtonResult.rows.length > 0) {
                         skippedMessages.push(`- "${newButtonName}" (موجود بالفعل)`);
                         continue;
