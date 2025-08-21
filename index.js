@@ -32,7 +32,7 @@ async function getClient() {
 }
 
 // دالة لتحديث حالة المستخدم وبياناته
-// دالة لتحديث حالة المستخدم وبياناته (نسخة محسّنة)
+// دالة لتحديث حالة المستخدم وبياناته (النسخة النهائية والمحسّنة)
 async function updateUserState(userId, updates) {
     const client = await getClient();
     try {
@@ -40,11 +40,11 @@ async function updateUserState(userId, updates) {
         const values = [];
         let paramIndex = 1;
 
+        // خريطة لربط أسماء الحقول في الكود بأسمائها في قاعدة البيانات
         const keyMapping = {
             state: 'state',
             stateData: 'state_data',
             currentPath: 'current_path'
-            // أضف أي حقول أخرى تحتاجها هنا
         };
 
         for (const key in updates) {
@@ -639,7 +639,7 @@ if (parentId) {
 const existingButtonResult = await client.query(queryText, queryValues);
                 const parentId = buttonResult.rows[0]?.parent_id;
 
-                const existingButtonResult = await client.query('SELECT id FROM public.buttons WHERE parent_id ' + (parentId ? '= $1' : 'IS NULL') + ' AND text = $2 AND id <> $3', parentId ? [parentId, newButtonName, buttonIdToRename] : [newButtonName, buttonIdToRename]);
+                
                 if (existingButtonResult.rows.length > 0) {
                     await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
                     return ctx.reply(`⚠️ يوجد زر آخر بهذا الاسم "${newButtonName}". تم إلغاء التعديل.`);
