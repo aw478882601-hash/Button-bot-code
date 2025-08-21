@@ -221,7 +221,7 @@ async function generateKeyboard(userId) {
   }
 }
 
-// دالة لإرسال رسائل الزر
+// دالة لإرسال رسائل الزر (نسخة معدّلة)
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     const client = await getClient();
     try {
@@ -242,19 +242,20 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
             const messageId = message.id;
 
             if (inEditMode) {
+                // تم تقصير بيانات الزر لتجنب الخطأ
                 const baseControls = [
-                    Markup.button.callback('🔼', `msg:up:${buttonId}:${messageId}`),
-                    Markup.button.callback('🔽', `msg:down:${buttonId}:${messageId}`),
-                    Markup.button.callback('🗑️', `msg:delete:${buttonId}:${messageId}`),
-                    Markup.button.callback('➕', `msg:addnext:${buttonId}:${messageId}`)
+                    Markup.button.callback('🔼', `msg:up:${messageId}`),
+                    Markup.button.callback('🔽', `msg:down:${messageId}`),
+                    Markup.button.callback('🗑️', `msg:delete:${messageId}`),
+                    Markup.button.callback('➕', `msg:addnext:${messageId}`)
                 ];
                 if (message.type === 'text') {
-                    baseControls.push(Markup.button.callback('✏️', `msg:edit:${buttonId}:${messageId}`));
+                    baseControls.push(Markup.button.callback('✏️', `msg:edit:${messageId}`));
                     inlineKeyboard = [ baseControls ];
                 } else {
                      inlineKeyboard = [ baseControls, [
-                        Markup.button.callback('📝 تعديل الشرح', `msg:edit_caption:${buttonId}:${messageId}`),
-                        Markup.button.callback('🔄 استبدال الملف', `msg:replace_file:${buttonId}:${messageId}`)
+                        Markup.button.callback('📝 تعديل الشرح', `msg:edit_caption:${messageId}`),
+                        Markup.button.callback('🔄 استبدال الملف', `msg:replace_file:${messageId}`)
                     ]];
                 }
             }
@@ -584,19 +585,17 @@ const mainMessageHandler = async (ctx) => {
                         skippedMessages.push(`- "${newButtonName}" (اسم محجوز)`);
                         continue;
                     }
+                    
                     let queryText, queryValues;
+                    if (parentId) {
+                        queryText = 'SELECT id FROM public.buttons WHERE parent_id = $1 AND text = $2';
+                        queryValues = [parentId, newButtonName];
+                    } else {
+                        queryText = 'SELECT id FROM public.buttons WHERE parent_id IS NULL AND text = $1';
+                        queryValues = [newButtonName];
+                    }
+                    const existingButtonResult = await client.query(queryText, queryValues);
 
-if (parentId) {
-    // الحالة التي يكون فيها parentId موجوداً
-    queryText = 'SELECT id FROM public.buttons WHERE parent_id = $1 AND text = $2';
-    queryValues = [parentId, newButtonName];
-} else {
-    // الحالة التي يكون فيها parentId غير موجود (القائمة الرئيسية)
-    queryText = 'SELECT id FROM public.buttons WHERE parent_id IS NULL AND text = $1';
-    queryValues = [newButtonName];
-}
-
-const existingButtonResult = await client.query(queryText, queryValues);
                     if (existingButtonResult.rows.length > 0) {
                         skippedMessages.push(`- "${newButtonName}" (موجود بالفعل)`);
                         continue;
@@ -628,18 +627,19 @@ const existingButtonResult = await client.query(queryText, queryValues);
                      await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
                      return ctx.reply('حدث خطأ، لم يتم العثور على الزر المراد تعديله.');
                 }
-                let queryText, queryValues;
-if (parentId) {
-    queryText = 'SELECT id FROM public.buttons WHERE parent_id = $1 AND text = $2 AND id <> $3';
-    queryValues = [parentId, newButtonName, buttonIdToRename];
-} else {
-    queryText = 'SELECT id FROM public.buttons WHERE parent_id IS NULL AND text = $1 AND id <> $2';
-    queryValues = [newButtonName, buttonIdToRename];
-}
-const existingButtonResult = await client.query(queryText, queryValues);
+                const buttonResult = await client.query('SELECT parent_id FROM public.buttons WHERE id = $1', [buttonIdToRename]);
                 const parentId = buttonResult.rows[0]?.parent_id;
-
                 
+                let queryText, queryValues;
+                if (parentId) {
+                    queryText = 'SELECT id FROM public.buttons WHERE parent_id = $1 AND text = $2 AND id <> $3';
+                    queryValues = [parentId, newButtonName, buttonIdToRename];
+                } else {
+                    queryText = 'SELECT id FROM public.buttons WHERE parent_id IS NULL AND text = $1 AND id <> $2';
+                    queryValues = [newButtonName, buttonIdToRename];
+                }
+                const existingButtonResult = await client.query(queryText, queryValues);
+
                 if (existingButtonResult.rows.length > 0) {
                     await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
                     return ctx.reply(`⚠️ يوجد زر آخر بهذا الاسم "${newButtonName}". تم إلغاء التعديل.`);
@@ -813,7 +813,7 @@ const existingButtonResult = await client.query(queryText, queryValues);
                 case '📊 الإحصائيات': {
                     const waitingMessage = await ctx.reply('⏳ جارٍ تجميع كافة الإحصائيات والتقارير المتقدمة، يرجى الانتظار...');
 
-                    const activeUsersResult = await client.query('SELECT COUNT(*) FROM public.users WHERE last_active = NOW()::date');
+                    const activeUsersResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active > NOW() - INTERVAL '1 DAY'");
                     const dailyActiveUsers = activeUsersResult.rows[0].count;
                     const totalButtonsResult = await client.query('SELECT COUNT(*) FROM public.buttons');
                     const totalMessagesResult = await client.query('SELECT COUNT(*) FROM public.messages');
@@ -827,10 +827,8 @@ const existingButtonResult = await client.query(queryText, queryValues);
                     const topAllTime = await processAndFormatTopButtons();
 
                     const topButtonsReport = `*🏆 الأكثر استخداماً:*\n${topAllTime}`;
-
-                    const date = new Date();
-                    date.setDate(date.getDate() - 10);
-                    const inactiveResult = await client.query('SELECT COUNT(*) FROM public.users WHERE last_active < $1', [date.toISOString().split('T')[0]]);
+                    
+                    const inactiveResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() - INTERVAL '10 DAY'");
                     const inactiveCount = inactiveResult.rows[0].count;
                     const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;
 
@@ -896,9 +894,8 @@ const existingButtonResult = await client.query(queryText, queryValues);
         }
         
         const buttonInfo = buttonResult.rows[0];
-        const buttonId = buttonInfo?.id;
-
-        if (!buttonId) return;
+        if (!buttonInfo) return; // إذا لم يتم العثور على زر، لا تفعل شيئًا
+        const buttonId = buttonInfo.id;
 
         if (isAdmin && state === 'AWAITING_SOURCE_BUTTON_TO_MOVE') {
             await updateUserState(userId, {
@@ -1073,21 +1070,32 @@ bot.on('callback_query', async (ctx) => {
         }
 
         if (action === 'msg') {
+            const messageId = subAction; // تم تغيير طريقة الحصول على messageId
+            const buttonIdFromCb = buttonId; // هذا الآن هو messageId الفعلي
+
+            // سنبحث عن الرسالة والزر الخاص بها
+            const msgResult = await client.query('SELECT *, button_id FROM public.messages WHERE id = $1', [buttonIdFromCb]);
+            if (msgResult.rows.length === 0) return ctx.answerCbQuery('الرسالة غير موجودة');
+            
+            const messageToHandle = msgResult.rows[0];
+            const buttonId = messageToHandle.button_id; // حصلنا على buttonId من قاعدة البيانات
+
             const messagesResult = await client.query('SELECT * FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]);
             const messages = messagesResult.rows;
-            const messageIndex = messages.findIndex(msg => msg.id === messageId);
-            if (messageIndex === -1) return ctx.answerCbQuery('الرسالة غير موجودة');
+            const messageIndex = messages.findIndex(msg => msg.id === messageToHandle.id);
 
-            if (subAction === 'delete') {
-                await client.query('DELETE FROM public.messages WHERE id = $1', [messageId]);
+            const realSubAction = data.split(':')[1]; // نحصل على الإجراء الحقيقي (up, down, etc.)
+            
+            if (realSubAction === 'delete') {
+                await client.query('DELETE FROM public.messages WHERE id = $1', [messageToHandle.id]);
                 await client.query('UPDATE public.messages SET "order" = "order" - 1 WHERE button_id = $1 AND "order" > $2', [buttonId, messages[messageIndex].order]);
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, '🗑️ تم الحذف بنجاح.');
                 return ctx.answerCbQuery();
             }
-            if (subAction === 'up' || subAction === 'down') {
+            if (realSubAction === 'up' || realSubAction === 'down') {
                 const currentMessage = messages[messageIndex];
-                const newOrder = subAction === 'up' ? currentMessage.order - 1 : currentMessage.order + 1;
+                const newOrder = realSubAction === 'up' ? currentMessage.order - 1 : currentMessage.order + 1;
                 const targetMessageResult = await client.query('SELECT id, "order" FROM public.messages WHERE button_id = $1 AND "order" = $2', [buttonId, newOrder]);
                 const targetMessage = targetMessageResult.rows[0];
                 if (targetMessage) {
@@ -1100,22 +1108,22 @@ bot.on('callback_query', async (ctx) => {
                     return ctx.answerCbQuery('لا يمكن تحريك الرسالة أكثر.');
                 }
             }
-            if (subAction === 'edit') {
-                 await updateUserState(userId, { state: 'AWAITING_EDITED_TEXT', stateData: { messageId: messageId, buttonId: buttonId } });
+            if (realSubAction === 'edit') {
+                 await updateUserState(userId, { state: 'AWAITING_EDITED_TEXT', stateData: { messageId: messageToHandle.id, buttonId: buttonId } });
                  await ctx.answerCbQuery();
                  return ctx.reply("📝 أرسل أو وجّه المحتوى الجديد (نص فقط):", { reply_markup: { force_reply: true } });
             }
-             if (subAction === 'edit_caption') {
-                await updateUserState(userId, { state: 'AWAITING_NEW_CAPTION', stateData: { messageId: messageId, buttonId: buttonId } });
+             if (realSubAction === 'edit_caption') {
+                await updateUserState(userId, { state: 'AWAITING_NEW_CAPTION', stateData: { messageId: messageToHandle.id, buttonId: buttonId } });
                 await ctx.answerCbQuery();
                 return ctx.reply("📝 أرسل أو وجّه رسالة تحتوي على الشرح الجديد:", { reply_markup: { force_reply: true } });
             }
-            if (subAction === 'replace_file') {
-                await updateUserState(userId, { state: 'AWAITING_REPLACEMENT_FILE', stateData: { messageId: messageId, buttonId: buttonId } });
+            if (realSubAction === 'replace_file') {
+                await updateUserState(userId, { state: 'AWAITING_REPLACEMENT_FILE', stateData: { messageId: messageToHandle.id, buttonId: buttonId } });
                 await ctx.answerCbQuery();
                 return ctx.reply("🔄 أرسل أو وجّه الملف الجديد:", { reply_markup: { force_reply: true } });
             }
-            if (subAction === 'addnext') {
+            if (realSubAction === 'addnext') {
                 const msg = messages[messageIndex];
                 await updateUserState(userId, { state: 'AWAITING_NEW_MESSAGE', stateData: { buttonId, targetOrder: msg.order + 1 } });
                 await ctx.answerCbQuery();
