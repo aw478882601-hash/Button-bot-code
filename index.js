@@ -425,7 +425,7 @@ bot.start(async (ctx) => {
 // --- أوامر الإدارة الجديدة (حظر، فك حظر، معلومات) ---
 
 // دالة مساعدة للتعامل مع الحظر وفك الحظر
-// --- أوامر الحظر وفك الحظر الجديدة عبر الـ ID ---
+// --- دالة مساعدة للتعامل مع الحظر وفك الحظر (تدعم الطريقتين) ---
 const banUnbanHandler = async (ctx, banAction) => {
     const client = await getClient();
     try {
@@ -433,30 +433,46 @@ const banUnbanHandler = async (ctx, banAction) => {
         const adminResult = await client.query('SELECT is_admin FROM public.users WHERE id = $1', [adminId]);
         if (!adminResult.rows[0]?.is_admin) return; // الأمر للمشرفين فقط
 
-        const parts = ctx.message.text.split(' ');
-        if (parts.length < 2 || !/^\d+$/.test(parts[1])) {
-            return ctx.reply(`⚠️ الاستخدام الصحيح:\n\`/ban <USER_ID>\`\n\`/unban <USER_ID>\``, { parse_mode: 'Markdown' });
+        let targetId = null;
+        let targetName = null;
+
+        // ✨ الخطوة 1: التحقق من طريقة الرد على رسالة موجهة
+        if (ctx.message.reply_to_message && ctx.message.reply_to_message.forward_from) {
+            const targetUser = ctx.message.reply_to_message.forward_from;
+            targetId = String(targetUser.id);
+            targetName = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+        } 
+        // ✨ الخطوة 2: إذا لم تكن الطريقة الأولى، تحقق من وجود ID في الأمر
+        else {
+            const parts = ctx.message.text.split(' ');
+            if (parts.length > 1 && /^\d+$/.test(parts[1])) {
+                targetId = parts[1];
+                try {
+                    const userChat = await bot.telegram.getChat(targetId);
+                    targetName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
+                } catch (e) {
+                    targetName = `<code>${targetId}</code>`; // في حالة عدم العثور على المستخدم، استخدم الـ ID
+                }
+            }
         }
-        
-        const targetId = parts[1];
+
+        // ✨ الخطوة 3: إذا لم يتم تحديد هدف، أرسل رسالة تعليمات
+        if (!targetId) {
+            const command = banAction ? '/ban' : '/unban';
+            return ctx.replyWithHTML(`⚠️ <b>استخدام غير صحيح.</b>\n\nيمكنك استخدام الأمر بطريقتين:\n1️⃣ قم بالرد على رسالة مُعادة توجيهها من المستخدم بالأمر <code>${command}</code>.\n2️⃣ اكتب الأمر مع ID المستخدم، مثال: <code>${command} 123456789</code>.`);
+        }
+
         if (targetId === process.env.SUPER_ADMIN_ID) {
             return ctx.reply('🚫 لا يمكن تعديل حالة الأدمن الرئيسي.');
         }
 
         await client.query('UPDATE public.users SET banned = $1 WHERE id = $2', [banAction, targetId]);
         
-        let targetName = `<code>${targetId}</code>`;
-        try {
-            const userChat = await bot.telegram.getChat(targetId);
-            targetName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
-        } catch (e) { /* تجاهل الخطأ إذا لم يتم العثور على المستخدم */ }
-
         if (banAction) {
             await ctx.replyWithHTML(`🚫 تم حظر المستخدم <b>${targetName}</b> بنجاح.`);
             await bot.telegram.sendMessage(targetId, '🚫 لقد تم حظرك من استخدام هذا البوت.').catch(e => console.error(e.message));
         } else {
             await ctx.replyWithHTML(`✅ تم فك حظر المستخدم <b>${targetName}</b> بنجاح.`);
-            // ✨ الجزء الأهم: إعلام المستخدم فورًا بفك الحظر ✨
             await bot.telegram.sendMessage(targetId, '✅ تم فك الحظر عنك. يمكنك الآن استخدام البوت مجددًا.').catch(e => console.error(e.message));
         }
 
