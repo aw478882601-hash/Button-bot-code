@@ -425,49 +425,51 @@ bot.start(async (ctx) => {
 // --- أوامر الإدارة الجديدة (حظر، فك حظر، معلومات) ---
 
 // دالة مساعدة للتعامل مع الحظر وفك الحظر
-async function handleBanUnban(ctx, banAction) {
+// --- أوامر الحظر وفك الحظر الجديدة عبر الـ ID ---
+const banUnbanHandler = async (ctx, banAction) => {
     const client = await getClient();
     try {
         const adminId = String(ctx.from.id);
-        const userResult = await client.query('SELECT is_admin FROM public.users WHERE id = $1', [adminId]);
-        if (!userResult.rows[0]?.is_admin) {
-            return; // ليس مشرفًا
+        const adminResult = await client.query('SELECT is_admin FROM public.users WHERE id = $1', [adminId]);
+        if (!adminResult.rows[0]?.is_admin) return; // الأمر للمشرفين فقط
+
+        const parts = ctx.message.text.split(' ');
+        if (parts.length < 2 || !/^\d+$/.test(parts[1])) {
+            return ctx.reply(`⚠️ الاستخدام الصحيح:\n\`/ban <USER_ID>\`\n\`/unban <USER_ID>\``, { parse_mode: 'Markdown' });
         }
-
-        if (!ctx.message.reply_to_message || !ctx.message.reply_to_message.forward_from) {
-            return ctx.reply('⚠️ للاستخدام الصحيح، قم بالرد على رسالة مُعادة توجيهها من المستخدم بالأمر /ban أو /unban.');
-        }
-
-        const targetUser = ctx.message.reply_to_message.forward_from;
-        const targetId = String(targetUser.id);
-        const targetName = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
-
-        if (targetId === process.env.SUPER_ADMIN_ID) {
-            return ctx.reply('🚫 لا يمكن حظر أو فك حظر الأدمن الرئيسي.');
-        }
-
-        await client.query(`UPDATE public.users SET banned = $1 WHERE id = $2`, [banAction, targetId]);
         
+        const targetId = parts[1];
+        if (targetId === process.env.SUPER_ADMIN_ID) {
+            return ctx.reply('🚫 لا يمكن تعديل حالة الأدمن الرئيسي.');
+        }
+
+        await client.query('UPDATE public.users SET banned = $1 WHERE id = $2', [banAction, targetId]);
+        
+        let targetName = `<code>${targetId}</code>`;
+        try {
+            const userChat = await bot.telegram.getChat(targetId);
+            targetName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
+        } catch (e) { /* تجاهل الخطأ إذا لم يتم العثور على المستخدم */ }
+
         if (banAction) {
-            await ctx.reply(`🚫 تم حظر المستخدم *${targetName}* (<code>${targetId}</code>) بنجاح.`, { parse_mode: 'Markdown' });
+            await ctx.replyWithHTML(`🚫 تم حظر المستخدم <b>${targetName}</b> بنجاح.`);
             await bot.telegram.sendMessage(targetId, '🚫 لقد تم حظرك من استخدام هذا البوت.').catch(e => console.error(e.message));
         } else {
-            await ctx.reply(`✅ تم فك حظر المستخدم *${targetName}* (<code>${targetId}</code>) بنجاح.`, { parse_mode: 'Markdown' });
-          
-    await bot.telegram.sendMessage(targetId, '✅ تم فك الحظر عنك. يمكنك الآن استخدام البوت مجددًا.').catch(e => console.error(`Failed to send unban notification to user ${targetId}:`, e.message));
+            await ctx.replyWithHTML(`✅ تم فك حظر المستخدم <b>${targetName}</b> بنجاح.`);
+            // ✨ الجزء الأهم: إعلام المستخدم فورًا بفك الحظر ✨
+            await bot.telegram.sendMessage(targetId, '✅ تم فك الحظر عنك. يمكنك الآن استخدام البوت مجددًا.').catch(e => console.error(e.message));
         }
+
     } catch (error) {
-        console.error("Error in ban/unban command:", error);
+        console.error('Error in ban/unban command:', error);
+        await ctx.reply('حدث خطأ أثناء تنفيذ الأمر.');
     } finally {
         client.release();
     }
-}
+};
 
-// أمر الحظر
-bot.command('ban', (ctx) => handleBanUnban(ctx, true));
-
-// أمر فك الحظر
-bot.command('unban', (ctx) => handleBanUnban(ctx, false));
+bot.command('ban', (ctx) => banUnbanHandler(ctx, true));
+bot.command('unban', (ctx) => banUnbanHandler(ctx, false));
 
 // أمر عرض معلومات المستخدم
 // أمر عرض معلومات المستخدم (بالتنسيق النهائي والمفصل)
@@ -532,9 +534,9 @@ bot.command('info', async (ctx) => {
             : 'غير معروف';
 
         // بناء التقرير النهائي بالتنسيق الجديد
-        const userInfoReport = `📋 <b>تقرير المستخدم: ${targetName}</b>\n` +
+        const userInfoReport = `📋 <b>تقرير المستخدم: ${targetName}</b>\n\n` +
                              `<b>المعرف:</b> ${targetUsername} (<code>${targetId}</code>)\n\n` +
-                             `🕒 <b>آخر نشاط:</b> ${lastActiveFormatted}\n` +
+                             `🕒 <b>آخر نشاط:</b> ${lastActiveFormatted}\n\n` +
                              `🖱️ <b>إجمالي الضغطات (اليوم):</b> ${clicksToday}\n\n` +
                              // ✨ تعديل هنا: تمت إضافة سطرين للفصل عن العنوان ✨
                              `🔘 <b>تفاصيل نشاط الأزرار (اليوم):</b>\n\n` +
@@ -1152,24 +1154,31 @@ const mainMessageHandler = async (ctx) => {
                 case '📝 تعديل رسالة الترحيب':
                     await updateUserState(userId, { state: 'AWAITING_WELCOME_MESSAGE' });
                     return ctx.reply('أرسل رسالة الترحيب الجديدة:');
-                case '🚫 قائمة المحظورين':
-                    const bannedUsersResult = await client.query('SELECT id FROM public.users WHERE banned = true');
-                    if (bannedUsersResult.rows.length === 0) { return ctx.reply('لا يوجد مستخدمون محظورون حاليًا.'); }
-                    await ctx.reply('قائمة المستخدمين المحظورين:');
-                    for (const row of bannedUsersResult.rows) {
-                        const bannedUserId = String(row.id);
-                        try {
-                            const userChat = await bot.telegram.getChat(bannedUserId);
-                            const userName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
-                            const userLink = `tg://user?id=${bannedUserId}`;
-                            const userInfo = `<b>الاسم:</b> <a href="${userLink}">${userName}</a>\n<b>ID:</b> <code>${bannedUserId}</code>`;
-                            await ctx.reply(userInfo, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[ Markup.button.callback('✅ فك الحظر', `admin:unban:${bannedUserId}`) ]] } });
-                        } catch (e) {
-                            await ctx.reply(`- <code>${bannedUserId}</code>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[ Markup.button.callback('✅ فك الحظر', `admin:unban:${bannedUserId}`) ]] } });
-                        }
-                    }
-                    return;
-            }
+            case '🚫 قائمة المحظورين': {
+    const bannedUsersResult = await client.query('SELECT id FROM public.users WHERE banned = true');
+    if (bannedUsersResult.rows.length === 0) {
+        return ctx.reply('✅ لا يوجد مستخدمون محظورون حاليًا.');
+    }
+
+    let bannedListMessage = '<b>🚫 قائمة المستخدمين المحظورين:</b>\n\n';
+    
+    for (const row of bannedUsersResult.rows) {
+        const bannedUserId = String(row.id);
+        let userName = 'مستخدم غير معروف';
+        try {
+            const userChat = await bot.telegram.getChat(bannedUserId);
+            userName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
+        } catch (e) {
+            console.error(`Could not fetch info for banned user ${bannedUserId}`);
+        }
+        
+        bannedListMessage += `👤 <b>الاسم:</b> ${userName}\n` +
+                             `🆔 <b>ID:</b> <code>${bannedUserId}</code>\n` +
+                             `CMD: <code>/unban ${bannedUserId}</code>\n---\n`;
+    }
+
+    return ctx.replyWithHTML(bannedListMessage);
+}
         }
 
         const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
