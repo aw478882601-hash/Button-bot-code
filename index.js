@@ -183,6 +183,15 @@ async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '�
         client.release();
     }
 }
+// دالة جديدة مخصصة فقط لتحديث لوحة المفاتيح
+async function refreshKeyboardView(ctx, userId, confirmationMessage) {
+    try {
+        await ctx.reply(confirmationMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
+    } catch (error) {
+        console.error('Error refreshing keyboard view:', error);
+    }
+}
+
 
 // دالة لإنشاء لوحة المفاتيح
 async function generateKeyboard(userId) {
@@ -1142,12 +1151,14 @@ bot.on('callback_query', async (ctx) => {
             }
 
             if (subAction === 'yes') {
-                await ctx.editMessageText('⏳ جارٍ الحذف...');
-                await client.query('DELETE FROM public.buttons WHERE id = $1', [buttonId]);
-                await ctx.deleteMessage().catch(()=>{});
-                await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                
-            }
+    await client.query('DELETE FROM public.buttons WHERE id = $1', [buttonId]);
+    await ctx.editMessageText('🗑️ تم الحذف بنجاح.');
+    
+    // ✨ نستدعي الدالة الجديدة هنا ✨
+    await refreshKeyboardView(ctx, userId, 'تم تحديث لوحة المفاتيح.');
+    
+    return ctx.answerCbQuery();
+}
         }
 
         if (action === 'admin') {
@@ -1346,38 +1357,32 @@ bot.on('callback_query', async (ctx) => {
                 }
 
                 // 5. إذا تم التحريك بنجاح، قم بتحديث قاعدة البيانات
-                if (actionTaken) {
-                    await ctx.answerCbQuery('تم تحديث الترتيب ✔');
-                    const newButtonList = rows.flat();
-                    
-                    try {
-                        await client.query('BEGIN'); // بدء transaction
-                        
-                        for (let i = 0; i < newButtonList.length; i++) {
-                            const button = newButtonList[i];
-                            const finalRow = rows.find(r => r.some(b => b.id === button.id));
-                            const newIsFullWidth = finalRow.length === 1;
-                            
-                            await client.query(
-                                'UPDATE public.buttons SET "order" = $1, is_full_width = $2 WHERE id = $3',
-                                [i, newIsFullWidth, button.id]
-                            );
-                        }
-                        
-                        await client.query('COMMIT'); // حفظ التغييرات
-                        
-                        await ctx.reply('✅ تم تحديث ترتيب الأزرار.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                        
-                    } catch (e) {
-                        await client.query('ROLLBACK'); // تراجع في حالة حدوث خطأ
-                        console.error("Error updating button order:", e);
-                        await ctx.reply('❌ حدث خطأ أثناء تحديث الترتيب.');
-                    }
-                } else {
-                    await ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
-                }
-                return;
-            }
+               if (actionTaken) {
+    const newButtonList = rows.flat();
+    try {
+        await client.query('BEGIN');
+        for (let i = 0; i < newButtonList.length; i++) {
+            const button = newButtonList[i];
+            const finalRow = rows.find(r => r.some(b => b.id === button.id));
+            const newIsFullWidth = finalRow.length === 1;
+            await client.query('UPDATE public.buttons SET "order" = $1, is_full_width = $2 WHERE id = $3', [i, newIsFullWidth, button.id]);
+        }
+        await client.query('COMMIT');
+        
+        // ✨ نستدعي الدالة الجديدة هنا ✨
+        await refreshKeyboardView(ctx, userId, '✅ تم تحديث ترتيب الأزرار.');
+        
+        // نجيب على الضغطة بصمت للحفاظ على رسالة التحكم
+        await ctx.answerCbQuery();
+
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error("Error updating button order:", e);
+        await ctx.reply('❌ حدث خطأ أثناء تحديث الترتيب.');
+    }
+} else {
+    await ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
+}
                        
             // --- نهاية الجزء المضاف ---
         }
