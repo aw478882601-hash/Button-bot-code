@@ -1170,7 +1170,7 @@ const mainMessageHandler = async (ctx) => {
                 case '📝 تعديل رسالة الترحيب':
                     await updateUserState(userId, { state: 'AWAITING_WELCOME_MESSAGE' });
                     return ctx.reply('أرسل رسالة الترحيب الجديدة:');
-            case '🚫 قائمة المحظورين': {
+           case '🚫 قائمة المحظورين': {
     const bannedUsersResult = await client.query('SELECT id FROM public.users WHERE banned = true');
     if (bannedUsersResult.rows.length === 0) {
         return ctx.reply('✅ لا يوجد مستخدمون محظورون حاليًا.');
@@ -1181,20 +1181,28 @@ const mainMessageHandler = async (ctx) => {
     for (const row of bannedUsersResult.rows) {
         const bannedUserId = String(row.id);
         let userName = 'مستخدم غير معروف';
+        let userUsername = 'لا يوجد'; // متغير جديد لاسم المستخدم
+
         try {
             const userChat = await bot.telegram.getChat(bannedUserId);
             userName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
+            // ✨ جلب اسم المستخدم إذا كان موجودًا ✨
+            if (userChat.username) {
+                userUsername = `@${userChat.username}`;
+            }
         } catch (e) {
             console.error(`Could not fetch info for banned user ${bannedUserId}`);
         }
         
+        // ✨ إضافة سطر "المعرف" الجديد ✨
         bannedListMessage += `👤 <b>الاسم:</b> ${userName}\n` +
+                             `<b>المعرف:</b> ${userUsername}\n` +
                              `🆔 <b>ID:</b> <code>${bannedUserId}</code>\n` +
                              `CMD: <code>/unban ${bannedUserId}</code>\n---\n`;
     }
 
     return ctx.replyWithHTML(bannedListMessage);
-                         }
+}
         }
 
         const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
