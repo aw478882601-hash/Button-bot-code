@@ -453,6 +453,8 @@ async function handleBanUnban(ctx, banAction) {
             await bot.telegram.sendMessage(targetId, '🚫 لقد تم حظرك من استخدام هذا البوت.').catch(e => console.error(e.message));
         } else {
             await ctx.reply(`✅ تم فك حظر المستخدم *${targetName}* (<code>${targetId}</code>) بنجاح.`, { parse_mode: 'Markdown' });
+          
+    await bot.telegram.sendMessage(targetId, '✅ تم فك الحظر عنك. يمكنك الآن استخدام البوت مجددًا.').catch(e => console.error(`Failed to send unban notification to user ${targetId}:`, e.message));
         }
     } catch (error) {
         console.error("Error in ban/unban command:", error);
@@ -469,6 +471,7 @@ bot.command('unban', (ctx) => handleBanUnban(ctx, false));
 
 // أمر عرض معلومات المستخدم
 // أمر عرض معلومات المستخدم (بالتنسيق النهائي والمفصل)
+// أمر عرض معلومات المستخدم (مع إصلاح صيغة التاريخ)
 bot.command('info', async (ctx) => {
     const client = await getClient();
     try {
@@ -497,8 +500,6 @@ bot.command('info', async (ctx) => {
                 SELECT COUNT(*) FROM public.button_clicks_log 
                 WHERE user_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
             `, [targetId]),
-
-            // ✨ تعديل هنا: الاستعلام الآن يحسب عدد الضغطات لكل زر ✨
             client.query(`
                 SELECT b.text, COUNT(l.id) as click_count
                 FROM public.buttons b 
@@ -512,13 +513,22 @@ bot.command('info', async (ctx) => {
         const lastActive = botUserResult.rows[0]?.last_active;
         const clicksToday = clicksTodayResult.rows[0].count;
         
-        // ✨ تعديل هنا: تنسيق قائمة الأزرار مع عدد الضغطات ✨
         const buttonsVisited = buttonsVisitedResult.rows.length > 0 
             ? buttonsVisitedResult.rows.map(r => `- ${r.text} (${r.click_count} ضغطة)`).join('\n') 
             : 'لم يزر أي أزرار اليوم';
         
+        // ✨ تعديل هنا: تحديد صيغة التاريخ يدويًا لحل المشكلة ✨
         const lastActiveFormatted = lastActive 
-            ? new Date(lastActive).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', weekday: 'long', dateStyle: 'medium', timeStyle: 'short' })
+            ? new Date(lastActive).toLocaleString('ar-EG', {
+                timeZone: 'Africa/Cairo',
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            })
             : 'غير معروف';
 
         const userInfoReport = `📋 <b>تقرير المستخدم: ${targetName}</b>\n` +
@@ -1294,6 +1304,7 @@ bot.on('callback_query', async (ctx) => {
                 await client.query('UPDATE public.users SET banned = false WHERE id = $1', [targetId]);
                 await ctx.answerCbQuery();
                 await ctx.editMessageText(`✅ تم فك حظر المستخدم <code>${targetId}</code>.`, { parse_mode: 'HTML' });
+              await bot.telegram.sendMessage(targetId, '✅ تم فك الحظر عنك. يمكنك الآن استخدام البوت مجددًا.').catch(e => console.error(`Failed to send unban notification to user ${targetId}:`, e.message));
                 return;
             }
             if (userId !== process.env.SUPER_ADMIN_ID) return ctx.answerCbQuery('🚫 للمشرف الرئيسي فقط.', { show_alert: true });
