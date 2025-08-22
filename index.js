@@ -471,7 +471,7 @@ bot.command('unban', (ctx) => handleBanUnban(ctx, false));
 
 // أمر عرض معلومات المستخدم
 // أمر عرض معلومات المستخدم (بالتنسيق النهائي والمفصل)
-// أمر عرض معلومات المستخدم (مع إصلاح صيغة التاريخ)
+// أمر عرض معلومات المستخدم (مع تنسيق محسن)
 bot.command('info', async (ctx) => {
     const client = await getClient();
     try {
@@ -513,11 +513,11 @@ bot.command('info', async (ctx) => {
         const lastActive = botUserResult.rows[0]?.last_active;
         const clicksToday = clicksTodayResult.rows[0].count;
         
+        // ✨ تعديل هنا: تمت إضافة سطرين للفصل بين الأزرار ✨
         const buttonsVisited = buttonsVisitedResult.rows.length > 0 
-            ? buttonsVisitedResult.rows.map(r => `- ${r.text} (${r.click_count} ضغطة)`).join('\n') 
+            ? buttonsVisitedResult.rows.map(r => `- ${r.text} (${r.click_count} ضغطة)`).join('\n\n') 
             : 'لم يزر أي أزرار اليوم';
         
-        // ✨ تعديل هنا: تحديد صيغة التاريخ يدويًا لحل المشكلة ✨
         const lastActiveFormatted = lastActive 
             ? new Date(lastActive).toLocaleString('ar-EG', {
                 timeZone: 'Africa/Cairo',
@@ -531,11 +531,13 @@ bot.command('info', async (ctx) => {
             })
             : 'غير معروف';
 
+        // بناء التقرير النهائي بالتنسيق الجديد
         const userInfoReport = `📋 <b>تقرير المستخدم: ${targetName}</b>\n` +
                              `<b>المعرف:</b> ${targetUsername} (<code>${targetId}</code>)\n\n` +
                              `🕒 <b>آخر نشاط:</b> ${lastActiveFormatted}\n` +
                              `🖱️ <b>إجمالي الضغطات (اليوم):</b> ${clicksToday}\n\n` +
-                             `🔘 <b>تفاصيل نشاط الأزرار (اليوم):</b>\n` +
+                             // ✨ تعديل هنا: تمت إضافة سطرين للفصل عن العنوان ✨
+                             `🔘 <b>تفاصيل نشاط الأزرار (اليوم):</b>\n\n` +
                              `${buttonsVisited}`;
 
         await ctx.replyWithHTML(userInfoReport);
@@ -1301,12 +1303,17 @@ bot.on('callback_query', async (ctx) => {
                 return;
             }
             if (subAction === 'unban') {
-                await client.query('UPDATE public.users SET banned = false WHERE id = $1', [targetId]);
-                await ctx.answerCbQuery();
-                await ctx.editMessageText(`✅ تم فك حظر المستخدم <code>${targetId}</code>.`, { parse_mode: 'HTML' });
-              await bot.telegram.sendMessage(targetId, '✅ تم فك الحظر عنك. يمكنك الآن استخدام البوت مجددًا.').catch(e => console.error(`Failed to send unban notification to user ${targetId}:`, e.message));
-                return;
-            }
+    const targetId = parts[2]; // تأكد من أن targetId يتم تعريفه هنا
+
+    await client.query('UPDATE public.users SET banned = false WHERE id = $1', [targetId]);
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(`✅ تم فك حظر المستخدم <code>${targetId}</code>.`, { parse_mode: 'HTML' });
+
+    // ✨ تأكد من وجود هذا السطر، فهو المسؤول عن إرسال الإعلام للمستخدم ✨
+    await bot.telegram.sendMessage(targetId, '✅ تم فك الحظر عنك. يمكنك الآن استخدام البوت مجددًا.').catch(e => console.error(`Failed to send unban notification to user ${targetId}:`, e.message));
+
+    return;
+}
             if (userId !== process.env.SUPER_ADMIN_ID) return ctx.answerCbQuery('🚫 للمشرف الرئيسي فقط.', { show_alert: true });
             if (subAction === 'add') {
                 await updateUserState(userId, { state: 'AWAITING_ADMIN_ID_TO_ADD' });
