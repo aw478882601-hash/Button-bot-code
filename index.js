@@ -87,46 +87,74 @@ async function trackSentMessages(userId, messageIds) {
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية وتوقيت مصر)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم إصلاح توقيت اليوم)
+// دالة لتجميع ومعالجة إحصائيات الأزرار (النسخة النهائية مع نظام التجميع ومعالجة بيانات اليوم)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
-        let whereClause = '';
         let title = '';
+        let query;
 
-        switch (interval) {
-            case 'daily':
-                // ✨ تم إصلاح الشرط هنا ليقوم بتحويل وقت الضغطة إلى توقيت مصر قبل المقارنة
-                whereClause = "WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date";
-                title = '*🏆 الأكثر استخداماً (اليوم):*';
-                break;
-            case 'weekly':
-                // هذا الشرط كان صحيحًا ولا يحتاج لتعديل
-                whereClause = "WHERE l.clicked_at >= date_trunc('week', NOW() AT TIME ZONE 'Africa/Cairo')";
+        const todayDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+        if (interval === 'daily') {
+            title = '*🏆 الأكثر استخداماً (اليوم):*';
+            query = `
+                WITH combined_today AS (
+                    -- جزء الأرشيف (إذا تم الأرشفة بالخطأ)
+                    SELECT b.id, b.text, s.total_clicks as clicks
+                    FROM public.buttons b
+                    JOIN public.daily_button_stats s ON b.id = s.button_id
+                    WHERE s.click_date = '${todayDate}'
+                    UNION ALL
+                    -- جزء السجل المباشر
+                    SELECT b.id, b.text, COUNT(l.id) as clicks
+                    FROM public.buttons b
+                    JOIN public.button_clicks_log l ON b.id = l.button_id
+                    GROUP BY b.id, b.text
+                )
+                SELECT text, SUM(clicks)::integer as clicks_count
+                FROM combined_today
+                GROUP BY text
+                ORDER BY clicks_count DESC
+                LIMIT 10;
+            `;
+        } else { // الأسبوعي والكلي
+            let dateFilter = '';
+            if (interval === 'weekly') {
                 title = '*🏆 الأكثر استخداماً (أسبوعياً):*';
-                break;
-            default: // all-time
-                whereClause = '';
+                dateFilter = `WHERE s.click_date >= date_trunc('week', now() AT TIME ZONE 'Africa/Cairo')`;
+            } else {
                 title = '*🏆 الأكثر استخداماً (الكلي):*';
-                break;
+            }
+            query = `
+                WITH combined_stats AS (
+                    SELECT b.id, b.text, SUM(s.total_clicks) as clicks
+                    FROM public.buttons b
+                    JOIN public.daily_button_stats s ON b.id = s.button_id
+                    ${dateFilter}
+                    GROUP BY b.id, b.text
+                    UNION ALL
+                    SELECT b.id, b.text, COUNT(l.id) as clicks
+                    FROM public.buttons b
+                    JOIN public.button_clicks_log l ON b.id = l.button_id
+                    GROUP BY b.id, b.text
+                )
+                SELECT text, SUM(clicks)::integer as clicks_count
+                FROM combined_stats
+                GROUP BY text
+                ORDER BY clicks_count DESC
+                LIMIT 10;
+            `;
         }
 
-        const query = `
-            SELECT b.text, COUNT(l.button_id) as clicks_count, COUNT(DISTINCT l.user_id) as unique_users
-            FROM public.buttons b
-            JOIN public.button_clicks_log l ON b.id = l.button_id
-            ${whereClause}
-            GROUP BY b.text
-            ORDER BY clicks_count DESC
-            LIMIT 10;
-        `;
         const { rows } = await client.query(query);
 
         if (rows.length === 0) {
-            return `${title}\nلا توجد بيانات لعرضها في هذه الفترة.`;
+            return `${title}\nلا توجد بيانات لعرضها.`;
         }
-
+        
         const formattedRows = rows.map((row, index) =>
-            `${index + 1}. *${row.text}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\`\n   - 👤 المستخدمون: \`${row.unique_users}\``
+            `${index + 1}. *${row.text}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\``
         ).join('\n\n');
 
         return `${title}\n${formattedRows}`;
@@ -1187,27 +1215,38 @@ bot.on('callback_query', async (ctx) => {
                 return;
             }
            if (subAction === 'stats') {
-                // ✨ تم إصلاح الشرط هنا أيضًا
-                const dailyClicksResult = await client.query("SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date", [buttonId]);
-                const dailyUsersResult = await client.query("SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date", [buttonId]);
-                
-                const totalClicksResult = await client.query('SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1', [buttonId]);
-                const totalUsersResult = await client.query('SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE button_id = $1', [buttonId]);
-                
-                const dailyClicks = dailyClicksResult.rows[0].count;
-                const dailyUsers = dailyUsersResult.rows[0].count;
-                const totalClicks = totalClicksResult.rows[0].count;
-                const totalUsers = totalUsersResult.rows[0].count;
+    const todayDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
-                const buttonTextResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
-                const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
+    // 1. جلب إحصائيات اليوم (من السجل المباشر + الأرشيف)
+    const todayResultLive = await client.query(`SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users FROM public.button_clicks_log WHERE button_id = $1`, [buttonId]);
+    const todayResultArchive = await client.query(`SELECT total_clicks as clicks FROM public.daily_button_stats WHERE button_id = $1 AND click_date = $2`, [buttonId, todayDate]);
 
-                const statsMessage = `📊 <b>إحصائيات الزر: ${buttonName}</b>\n\n` + `👆 <b>الضغطات:</b>\n` + `  - اليوم: <code>${dailyClicks}</code>\n` + `  - الكلي: <code>${totalClicks}</code>\n\n` + `👤 <b>المستخدمون:</b>\n` + `  - اليوم: <code>${dailyUsers}</code>\n` + `  - الكلي: <code>${totalUsers}</code>`;
-                
-                await ctx.answerCbQuery();
-                await ctx.replyWithHTML(statsMessage);
-                return;
-            }
+    // 2. جلب الإحصائيات التاريخية (من الأرشيف فقط)
+    const historicalResult = await client.query(`SELECT SUM(total_clicks) as clicks FROM public.daily_button_stats WHERE button_id = $1 AND click_date <> $2`, [buttonId, todayDate]);
+
+    const dailyClicksLive = parseInt(todayResultLive.rows[0].clicks || 0);
+    const dailyClicksArchive = parseInt(todayResultArchive.rows[0]?.clicks || 0);
+    const dailyClicks = dailyClicksLive + dailyClicksArchive;
+
+    const dailyUsers = parseInt(todayResultLive.rows[0].users || 0); // ملاحظة: عدد المستخدمين الفريدين لليوم سيأتي من السجل المباشر فقط
+    
+    const historicalClicks = parseInt(historicalResult.rows[0].clicks || 0);
+    const totalClicks = dailyClicks + historicalClicks;
+
+    const buttonTextResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
+    const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
+
+    const statsMessage = `📊 <b>إحصائيات الزر: ${buttonName}</b>\n\n` +
+        `👆 <b>الضغطات:</b>\n` +
+        `  - اليوم: <code>${dailyClicks}</code>\n` +
+        `  - الكلي: <code>${totalClicks}</code>\n\n` +
+        `👤 <b>المستخدمون (اليوم):</b>\n` +
+        `  - اليوم: <code>${dailyUsers}</code>`;
+    
+    await ctx.answerCbQuery();
+    await ctx.replyWithHTML(statsMessage);
+    return;
+}
             
             // ---  ✨ الجزء الجديد الذي تمت إضافته ---
          // --- ✨✨✨ الجزء الجديد الخاص بتحريك الأزرار ✨✨✨ ---
