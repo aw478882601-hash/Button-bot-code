@@ -1181,7 +1181,7 @@ const mainMessageHandler = async (ctx) => {
                 default:
                     supervisionCommandHandled = false;
             }
-            if (supervisionCommandHandled) return;
+            return;
         }
         
         // --- إذا لم يكن أي مما سبق، ابحث عن زر عادي في قاعدة البيانات ---
