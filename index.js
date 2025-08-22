@@ -1093,19 +1093,12 @@ const mainMessageHandler = async (ctx) => {
                 break;
         }
 
+      // --- معالجة أزرار قائمة الإشراف ---
         if (currentPath === 'supervision' && isAdmin) {
-             switch (text) {
+            let supervisionCommandHandled = true;
+            switch (text) {
                 case '📊 الإحصائيات': {
-                    
-
-                    // تشغيل جلب جميع الإحصائيات بالتوازي لتحسين السرعة
-                    const [
-                        generalStatsData,
-                        topDaily,
-                        topWeekly,
-                        topAllTime
-                    ] = await Promise.all([
-                        // جلب الإحصائيات العامة
+                    const [ generalStatsData, topDaily, topWeekly, topAllTime ] = await Promise.all([
                         (async () => {
                             const client = await getClient();
                             try {
@@ -1121,90 +1114,77 @@ const mainMessageHandler = async (ctx) => {
                                     totalUsers: totalUsersResult.rows[0].count,
                                     inactiveCount: inactiveResult.rows[0].count,
                                 };
-                            } finally {
-                                client.release();
-                            }
+                            } finally { client.release(); }
                         })(),
-                        // جلب إحصائيات الأزرار
                         processAndFormatTopButtons('daily'),
                         processAndFormatTopButtons('weekly'),
                         processAndFormatTopButtons('all_time')
                     ]);
-                    
                     const { dailyActiveUsers, totalButtons, totalMessages, totalUsers, inactiveCount } = generalStatsData;
-
                     const generalStats = `*📊 الإحصائيات العامة:*\n\n` + `👤 المستخدمون: \`${totalUsers}\` (نشط اليوم: \`${dailyActiveUsers}\`)\n` + `🔘 الأزرار: \`${totalButtons}\`\n` + `✉️ الرسائل: \`${totalMessages}\``;
                     const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;
-
-                    // تجميع كل التقارير في رسالة واحدة
                     const finalReport = `${generalStats}\n\n---\n\n${topDaily}\n\n---\n\n${topWeekly}\n\n---\n\n${topAllTime}\n\n---\n\n${inactiveUsersReport}`;
                     await ctx.reply(finalReport, { parse_mode: 'Markdown' });
-                    
-                    
-                    return;
+                    break;
                 }
                 case '🗣️ رسالة جماعية':
                     await updateUserState(userId, { state: 'AWAITING_BROADCAST' });
-                    return ctx.reply('أرسل الآن الرسالة التي تريد بثها لجميع المستخدمين:');
+                    await ctx.reply('أرسل الآن الرسالة التي تريد بثها لجميع المستخدمين:');
+                    break;
                 case '⚙️ تعديل المشرفين':
-                     if (userId !== process.env.SUPER_ADMIN_ID) return ctx.reply('🚫 هذه الميزة للمشرف الرئيسي فقط.');
+                     if (userId !== process.env.SUPER_ADMIN_ID) { 
+                         await ctx.reply('🚫 هذه الميزة للمشرف الرئيسي فقط.'); 
+                         break;
+                     }
                     const adminsResult = await client.query('SELECT id FROM public.users WHERE is_admin = true');
                     let adminListText = '<b>المشرفون الحاليون:</b>\n';
-                    if (adminsResult.rows.length > 0) {
-                        for (const row of adminsResult.rows) {
-                            const adminId = String(row.id);
-                            try {
-                                const userChat = await bot.telegram.getChat(adminId);
-                                const userName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
-                                adminListText += `- ${userName} (<code>${adminId}</code>)\n`;
-                            } catch (e) {
-                                adminListText += `- <code>${adminId}</code> (لم يتم العثور على المستخدم)\n`;
-                            }
-                        }
-                    } else {
-                        adminListText = 'لا يوجد مشرفون حالياً.';
+                    for (const row of adminsResult.rows) {
+                        const adminId = String(row.id);
+                        try {
+                            const userChat = await bot.telegram.getChat(adminId);
+                            const userName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
+                            adminListText += `- ${userName} (<code>${adminId}</code>)\n`;
+                        } catch (e) { adminListText += `- <code>${adminId}</code> (لم يتم العثور على المستخدم)\n`; }
                     }
-                    return ctx.replyWithHTML(adminListText, Markup.inlineKeyboard([
+                    await ctx.replyWithHTML(adminListText, Markup.inlineKeyboard([
                         [Markup.button.callback('➕ إضافة مشرف', 'admin:add'), Markup.button.callback('➖ حذف مشرف', 'admin:remove')]
                     ]));
+                    break;
                 case '📝 تعديل رسالة الترحيب':
                     await updateUserState(userId, { state: 'AWAITING_WELCOME_MESSAGE' });
-                    return ctx.reply('أرسل رسالة الترحيب الجديدة:');
-           case '🚫 قائمة المحظورين': {
-    const bannedUsersResult = await client.query('SELECT id FROM public.users WHERE banned = true');
-    if (bannedUsersResult.rows.length === 0) {
-        return ctx.reply('✅ لا يوجد مستخدمون محظورون حاليًا.');
-    }
-
-    let bannedListMessage = '<b>🚫 قائمة المستخدمين المحظورين:</b>\n\n';
-    
-    for (const row of bannedUsersResult.rows) {
-        const bannedUserId = String(row.id);
-        let userName = 'مستخدم غير معروف';
-        let userUsername = 'لا يوجد'; // متغير جديد لاسم المستخدم
-
-        try {
-            const userChat = await bot.telegram.getChat(bannedUserId);
-            userName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
-            // ✨ جلب اسم المستخدم إذا كان موجودًا ✨
-            if (userChat.username) {
-                userUsername = `@${userChat.username}`;
+                    await ctx.reply('أرسل رسالة الترحيب الجديدة:');
+                    break;
+                case '🚫 قائمة المحظورين': {
+                    const bannedUsersResult = await client.query('SELECT id FROM public.users WHERE banned = true');
+                    if (bannedUsersResult.rows.length === 0) {
+                        await ctx.reply('✅ لا يوجد مستخدمون محظورون حاليًا.');
+                        break;
+                    }
+                    let bannedListMessage = '<b>🚫 قائمة المستخدمين المحظورين:</b>\n\n';
+                    for (const row of bannedUsersResult.rows) {
+                        const bannedUserId = String(row.id);
+                        let userName = 'مستخدم غير معروف', userUsername = 'لا يوجد';
+                        try {
+                            const userChat = await bot.telegram.getChat(bannedUserId);
+                            userName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
+                            if (userChat.username) userUsername = `@${userChat.username}`;
+                        } catch (e) { console.error(`Could not fetch info for banned user ${bannedUserId}`); }
+                        
+                        bannedListMessage += `👤 <b>الاسم:</b> ${userName}\n` +
+                                             `<b>المعرف:</b> ${userUsername}\n` +
+                                             `🆔 <b>ID:</b> <code>${bannedUserId}</code>\n` +
+                                             `CMD: <code>/unban ${bannedUserId}</code>\n---\n`;
+                    }
+                    await ctx.replyWithHTML(bannedListMessage);
+                    break;
+                }
+                default:
+                    supervisionCommandHandled = false;
             }
-        } catch (e) {
-            console.error(`Could not fetch info for banned user ${bannedUserId}`);
+            if (supervisionCommandHandled) return;
         }
         
-        // ✨ إضافة سطر "المعرف" الجديد ✨
-        bannedListMessage += `👤 <b>الاسم:</b> ${userName}\n` +
-                             `<b>المعرف:</b> ${userUsername}\n` +
-                             `🆔 <b>ID:</b> <code>${bannedUserId}</code>\n` +
-                             `CMD: <code>/unban ${bannedUserId}</code>\n---\n`;
-    }
-
-    return ctx.replyWithHTML(bannedListMessage);
-}
-        }
-
+        // --- إذا لم يكن أي مما سبق، ابحث عن زر عادي في قاعدة البيانات ---
         const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
         
         let buttonResult;
@@ -1215,14 +1195,11 @@ const mainMessageHandler = async (ctx) => {
         }
         
         const buttonInfo = buttonResult.rows[0];
-        if (!buttonInfo) return; // إذا لم يتم العثور على زر، لا تفعل شيئًا
+        if (!buttonInfo) return; // لم يتم العثور على زر مطابق
         const buttonId = buttonInfo.id;
 
         if (isAdmin && state === 'AWAITING_SOURCE_BUTTON_TO_MOVE') {
-            await updateUserState(userId, {
-                state: 'AWAITING_DESTINATION_PATH',
-                stateData: { sourceButtonId: buttonId, sourceButtonText: text }
-            });
+            await updateUserState(userId, { state: 'AWAITING_DESTINATION_PATH', stateData: { sourceButtonId: buttonId, sourceButtonText: text } });
             return ctx.reply(`✅ تم اختيار [${text}].\n\n🚙 الآن، تنقّل بحرية داخل البوت وعندما تصل للمكان المطلوب اضغط على زر "✅ النقل إلى هنا".`, Markup.keyboard(await generateKeyboard(userId)).resize());
         }
 
@@ -1233,12 +1210,13 @@ const mainMessageHandler = async (ctx) => {
         if (state === 'EDITING_BUTTONS' && isAdmin) {
             if (stateData && stateData.lastClickedButtonId === buttonId) {
                 await updateUserState(userId, { currentPath: `${currentPath}/${buttonId}`, stateData: {} });
-                return ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                await ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
                 await updateUserState(userId, { stateData: { lastClickedButtonId: buttonId } });
                 const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
-                return ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
+                await ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
             }
+            return;
         }
         
         const hasSubButtonsResult = await client.query('SELECT EXISTS(SELECT 1 FROM public.buttons WHERE parent_id = $1)', [buttonId]);
@@ -1253,7 +1231,6 @@ const mainMessageHandler = async (ctx) => {
         if (canEnter) {
             await updateUserState(userId, { currentPath: `${currentPath}/${buttonId}` });
             await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
-            
             let replyText = `أنت الآن في قسم: ${text}`;
             if (state === 'AWAITING_DESTINATION_PATH' && !hasSubButtons && !hasMessages) {
                 replyText = `🧭 تم الدخول إلى القسم الفارغ [${text}].\nاضغط "✅ النقل إلى هنا" لاختياره كوجهة.`;
@@ -1261,11 +1238,10 @@ const mainMessageHandler = async (ctx) => {
                 replyText = 'هذا الزر فارغ. يمكنك الآن إضافة رسائل أو أزرار فرعية.';
             }
             await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(userId)).resize());
-
         } else if (hasMessages) {
             await sendButtonMessages(ctx, buttonId, false);
         } else {
-            return ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
+            await ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
         
     } catch (error) {
