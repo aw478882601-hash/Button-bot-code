@@ -1377,6 +1377,7 @@ bot.on('callback_query', async (ctx) => {
                     await ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
                 }
                 return;
+            }
                        
             // --- نهاية الجزء المضاف ---
         }
