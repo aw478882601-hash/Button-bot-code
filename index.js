@@ -1092,7 +1092,9 @@ const mainMessageHandler = async (ctx) => {
                 }
                 break;
         }
-
+if (currentPath === 'supervision') {
+            return; // لا تبحث عن أزرار نصية في قسم الإشراف، تجاهل الرسالة
+        }
         if (currentPath === 'supervision' && isAdmin) {
              switch (text) {
                 case '📊 الإحصائيات': {
