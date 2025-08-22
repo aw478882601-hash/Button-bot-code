@@ -1132,9 +1132,7 @@ bot.on('callback_query', async (ctx) => {
         const action = parts[0];
 
         if (action === 'user' && parts[1] === 'reply') {
-            const targetAdminId = parts[2]; // الحصول على ID الأدمن من الزر
-            
-            // تخزين ID الأدمن للرد عليه تحديداً
+            const targetAdminId = parts[2];
             await updateUserState(userId, { state: 'REPLYING_TO_ADMIN', stateData: { targetAdminId: targetAdminId } });
             await ctx.answerCbQuery();
             return ctx.reply(`أرسل الآن ردك للمشرف المحدد:`);
@@ -1151,14 +1149,11 @@ bot.on('callback_query', async (ctx) => {
             }
 
             if (subAction === 'yes') {
-    await client.query('DELETE FROM public.buttons WHERE id = $1', [buttonId]);
-    await ctx.editMessageText('🗑️ تم الحذف بنجاح.');
-    
-    // ✨ نستدعي الدالة الجديدة هنا ✨
-    await refreshKeyboardView(ctx, userId, 'تم تحديث لوحة المفاتيح.');
-    
-    return ctx.answerCbQuery();
-}
+                await client.query('DELETE FROM public.buttons WHERE id = $1', [buttonId]);
+                await ctx.editMessageText('🗑️ تم الحذف بنجاح.');
+                await refreshKeyboardView(ctx, userId, 'تم تحديث لوحة المفاتيح.');
+                return ctx.answerCbQuery();
+            }
         }
 
         if (action === 'admin') {
@@ -1198,13 +1193,10 @@ bot.on('callback_query', async (ctx) => {
             }
         }
 
-      if (action === 'btn') {
-            await updateUserState(userId, { stateData: {} }); // << قم بإضافة هذا السطر
+        if (action === 'btn') {
+            await updateUserState(userId, { stateData: {} });
             const subAction = parts[1];
             const buttonId = parts[2];
-            
-            // لا تقم بمسح stateData هنا، فقط عند الإجراءات التي تنهي الوضع
-            // await updateUserState(userId, { stateData: {} });
 
             if (subAction === 'rename') {
                 await updateUserState(userId, { state: 'AWAITING_RENAME', stateData: { buttonId: buttonId } });
@@ -1212,17 +1204,16 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.editMessageText('أدخل الاسم الجديد:');
                 return;
             }
-           if (subAction === 'delete') {
-            const buttonResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
-            if (buttonResult.rows.length === 0) return ctx.answerCbQuery('الزر غير موجود بالفعل.');
-
-            const confirmationKeyboard = Markup.inlineKeyboard([
-                Markup.button.callback('✅ نعم، قم بالحذف', `confirm_delete_button:yes:${buttonId}`),
-                Markup.button.callback('❌ إلغاء', `confirm_delete_button:no:${buttonId}`)
-            ]);
-            await ctx.editMessageText(`🗑️ هل أنت متأكد من حذف الزر "${buttonResult.rows[0].text}" وكل ما بداخله؟ هذا الإجراء لا يمكن التراجع عنه.`, confirmationKeyboard);
-            return;
-        }
+            if (subAction === 'delete') {
+                const buttonResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
+                if (buttonResult.rows.length === 0) return ctx.answerCbQuery('الزر غير موجود بالفعل.');
+                const confirmationKeyboard = Markup.inlineKeyboard([
+                    Markup.button.callback('✅ نعم، قم بالحذف', `confirm_delete_button:yes:${buttonId}`),
+                    Markup.button.callback('❌ إلغاء', `confirm_delete_button:no:${buttonId}`)
+                ]);
+                await ctx.editMessageText(`🗑️ هل أنت متأكد من حذف الزر "${buttonResult.rows[0].text}" وكل ما بداخله؟`, confirmationKeyboard);
+                return;
+            }
             if (subAction === 'adminonly') {
                 const buttonResult = await client.query('SELECT admin_only FROM public.buttons WHERE id = $1', [buttonId]);
                 const adminOnly = !buttonResult.rows[0].admin_only;
@@ -1230,59 +1221,41 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.answerCbQuery(`الزر الآن ${adminOnly ? 'للمشرفين فقط' : 'للجميع'}`);
                 return;
             }
-          if (subAction === 'stats') {
-    const todayDate = new Date().toISOString().split('T')[0];
+            if (subAction === 'stats') {
+                const todayDate = new Date().toISOString().split('T')[0];
+                const todayResultLive = await client.query(`SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users FROM public.button_clicks_log WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (now() AT TIME ZONE 'Africa/Cairo')::date`, [buttonId]);
+                const todayResultArchive = await client.query(`SELECT total_clicks as clicks, unique_users_count as users FROM public.daily_button_stats WHERE button_id = $1 AND click_date = $2`, [buttonId, todayDate]);
+                const historicalResult = await client.query(`SELECT SUM(total_clicks) as clicks, SUM(unique_users_count) as users FROM public.daily_button_stats WHERE button_id = $1 AND click_date <> $2`, [buttonId, todayDate]);
+                
+                const dailyClicks = parseInt(todayResultLive.rows[0].clicks || 0) + parseInt(todayResultArchive.rows[0]?.clicks || 0);
+                const dailyUsers = parseInt(todayResultLive.rows[0].users || 0) + parseInt(todayResultArchive.rows[0]?.users || 0);
+                const historicalClicks = parseInt(historicalResult.rows[0].clicks || 0);
+                const totalClicks = dailyClicks + historicalClicks;
+                const totalUsers = dailyUsers + parseInt(historicalResult.rows[0].users || 0);
+                
+                const buttonTextResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
+                const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
 
-    // 1. جلب إحصائيات اليوم (من السجل المباشر)
-    const todayResultLive = await client.query(`
-        SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users FROM public.button_clicks_log 
-        WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (now() AT TIME ZONE 'Africa/Cairo')::date`, 
-    [buttonId]);
-    
-    // 2. جلب إحصائيات اليوم التي قد تكون أُرشفت بالخطأ
-    const todayResultArchive = await client.query(`SELECT total_clicks as clicks, unique_users_count as users FROM public.daily_button_stats WHERE button_id = $1 AND click_date = $2`, [buttonId, todayDate]);
-
-    // 3. جلب الإحصائيات التاريخية
-    const historicalResult = await client.query(`SELECT SUM(total_clicks) as clicks, SUM(unique_users_count) as users FROM public.daily_button_stats WHERE button_id = $1 AND click_date <> $2`, [buttonId, todayDate]);
-
-    // تجميع النتائج
-    const dailyClicks = parseInt(todayResultLive.rows[0].clicks || 0) + parseInt(todayResultArchive.rows[0]?.clicks || 0);
-    const dailyUsers = parseInt(todayResultLive.rows[0].users || 0) + parseInt(todayResultArchive.rows[0]?.users || 0);
-    const historicalClicks = parseInt(historicalResult.rows[0].clicks || 0);
-    const totalClicks = dailyClicks + historicalClicks;
-    const totalUsers = dailyUsers + parseInt(historicalResult.rows[0].users || 0);
-
-    const buttonTextResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
-    const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
-
-    const statsMessage = `📊 <b>إحصائيات الزر: ${buttonName}</b>\n\n` +
-        `👆 <b>الضغطات:</b>\n` +
-        `  - اليوم: <code>${dailyClicks}</code>\n` +
-        `  - الكلي: <code>${totalClicks}</code>\n\n` +
-        `👤 <b>المستخدمون:</b>\n` +
-        `  - اليوم: <code>${dailyUsers}</code>\n` +
-        `  - الكلي: <code>${totalUsers}</code>`;
-    
-    await ctx.answerCbQuery();
-    await ctx.replyWithHTML(statsMessage);
-    return;
-}
+                const statsMessage = `📊 <b>إحصائيات الزر: ${buttonName}</b>\n\n` +
+                    `👆 <b>الضغطات:</b>\n` +
+                    `  - اليوم: <code>${dailyClicks}</code>\n` +
+                    `  - الكلي: <code>${totalClicks}</code>\n\n` +
+                    `👤 <b>المستخدمون:</b>\n` +
+                    `  - اليوم: <code>${dailyUsers}</code>\n` +
+                    `  - الكلي: <code>${totalUsers}</code>`;
+                
+                await ctx.answerCbQuery();
+                await ctx.replyWithHTML(statsMessage);
+                return;
+            }
             
-            // ---  ✨ الجزء الجديد الذي تمت إضافته ---
-         // --- ✨✨✨ الجزء الجديد الخاص بتحريك الأزرار ✨✨✨ ---
             if (['up', 'down', 'left', 'right'].includes(subAction)) {
-                // 1. جلب كل الأزرار في نفس المستوى لتحديد الترتيب الحالي
                 const btnToMoveResult = await client.query('SELECT parent_id FROM public.buttons WHERE id = $1', [buttonId]);
                 if (btnToMoveResult.rows.length === 0) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
                 const parentId = btnToMoveResult.rows[0].parent_id;
-
-                const buttonsResult = await client.query(
-                    'SELECT id, "order", is_full_width FROM public.buttons WHERE parent_id ' + (parentId ? '= $1' : 'IS NULL') + ' ORDER BY "order"',
-                    parentId ? [parentId] : []
-                );
+                const buttonsResult = await client.query('SELECT id, "order", is_full_width FROM public.buttons WHERE parent_id ' + (parentId ? '= $1' : 'IS NULL') + ' ORDER BY "order"', parentId ? [parentId] : []);
                 const buttonList = buttonsResult.rows;
                 
-                // 2. إعادة بناء شكل الأزرار كما يظهر للمستخدم في مصفوفة صفوف
                 let rows = [];
                 let currentRow = [];
                 buttonList.forEach(btn => {
@@ -1294,14 +1267,11 @@ bot.on('callback_query', async (ctx) => {
                 });
                 if (currentRow.length > 0) rows.push(currentRow);
 
-                // 3. إيجاد مكان الزر المراد تحريكه (رقم الصف والعمود)
-                let targetRowIndex = -1;
-                let targetColIndex = -1;
+                let targetRowIndex = -1, targetColIndex = -1;
                 rows.find((row, rIndex) => {
                     const cIndex = row.findIndex(b => b.id === buttonId);
                     if (cIndex !== -1) {
-                        targetRowIndex = rIndex;
-                        targetColIndex = cIndex;
+                        targetRowIndex = rIndex; targetColIndex = cIndex;
                         return true;
                     }
                     return false;
@@ -1310,92 +1280,70 @@ bot.on('callback_query', async (ctx) => {
                 if (targetRowIndex === -1) return ctx.answerCbQuery('!خطأ في إيجاد الزر');
                 
                 let actionTaken = false;
-
-                // 4. تطبيق منطق التحريك حسب الإجراء المطلوب
-                if (subAction === 'up') {
-                    // زر بنصف عرض يصبح زر بعرض كامل فوق شريكه
+                 if (subAction === 'up') {
                     if (rows[targetRowIndex].length > 1) { 
                         const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
                         const self = rows[targetRowIndex][targetColIndex];
                         rows.splice(targetRowIndex, 1, [self], [partner]);
                         actionTaken = true;
-                    // زر بعرض كامل يندمج مع زر آخر بعرض كامل فوقه ليصبحا صفا واحدا
-                    } else if (targetRowIndex > 0) {
-                        const rowAbove = rows[targetRowIndex - 1];
-                        if (rowAbove.length === 1) { 
-                            const buttonAbove = rowAbove[0];
-                            const self = rows[targetRowIndex][0];
-                            rows[targetRowIndex - 1] = [buttonAbove, self];
-                            rows.splice(targetRowIndex, 1);
-                            actionTaken = true;
-                        }
+                    } else if (targetRowIndex > 0 && rows[targetRowIndex - 1].length === 1) {
+                        const buttonAbove = rows[targetRowIndex - 1][0];
+                        const self = rows[targetRowIndex][0];
+                        rows[targetRowIndex - 1] = [buttonAbove, self];
+                        rows.splice(targetRowIndex, 1);
+                        actionTaken = true;
                     }
                 } else if (subAction === 'down') {
-                    // زر بنصف عرض يصبح زر بعرض كامل تحت شريكه
                     if (rows[targetRowIndex].length > 1) { 
                         const partner = rows[targetRowIndex][targetColIndex === 0 ? 1 : 0];
                         const self = rows[targetRowIndex][targetColIndex];
                         rows.splice(targetRowIndex, 1, [partner], [self]);
                         actionTaken = true;
-                    // زر بعرض كامل يندمج مع زر آخر بعرض كامل تحته
-                    } else if (targetRowIndex < rows.length - 1) {
-                        const rowBelow = rows[targetRowIndex + 1];
-                        if (rowBelow.length === 1) { 
-                            const buttonBelow = rowBelow[0];
-                            const self = rows[targetRowIndex][0];
-                            rows.splice(targetRowIndex, 1);
-                            rows[targetRowIndex] = [self, buttonBelow];
-                            actionTaken = true;
-                        }
-                    }
-                } else if (subAction === 'left' || subAction === 'right') {
-                    // تبديل الأماكن في نفس الصف
-                    if (rows[targetRowIndex].length > 1) {
-                        [rows[targetRowIndex][0], rows[targetRowIndex][1]] = [rows[targetRowIndex][1], rows[targetRowIndex][0]];
+                    } else if (targetRowIndex < rows.length - 1 && rows[targetRowIndex + 1].length === 1) {
+                        const buttonBelow = rows[targetRowIndex + 1][0];
+                        const self = rows[targetRowIndex][0];
+                        rows.splice(targetRowIndex, 1);
+                        rows[targetRowIndex] = [self, buttonBelow];
                         actionTaken = true;
                     }
+                } else if (['left', 'right'].includes(subAction) && rows[targetRowIndex].length > 1) {
+                    [rows[targetRowIndex][0], rows[targetRowIndex][1]] = [rows[targetRowIndex][1], rows[targetRowIndex][0]];
+                    actionTaken = true;
                 }
 
-                // 5. إذا تم التحريك بنجاح، قم بتحديث قاعدة البيانات
-               if (actionTaken) {
-    const newButtonList = rows.flat();
-    try {
-        await client.query('BEGIN');
-        for (let i = 0; i < newButtonList.length; i++) {
-            const button = newButtonList[i];
-            const finalRow = rows.find(r => r.some(b => b.id === button.id));
-            const newIsFullWidth = finalRow.length === 1;
-            await client.query('UPDATE public.buttons SET "order" = $1, is_full_width = $2 WHERE id = $3', [i, newIsFullWidth, button.id]);
-        }
-        await client.query('COMMIT');
-        
-        // ✨ نستدعي الدالة الجديدة هنا ✨
-        await refreshKeyboardView(ctx, userId, '✅ تم تحديث ترتيب الأزرار.');
-        
-        // نجيب على الضغطة بصمت للحفاظ على رسالة التحكم
-        await ctx.answerCbQuery();
-
-    } catch (e) {
-        await client.query('ROLLBACK');
-        console.error("Error updating button order:", e);
-        await ctx.reply('❌ حدث خطأ أثناء تحديث الترتيب.');
-    }
-} else {
-    await ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
-                 return;
+                if (actionTaken) {
+                    const newButtonList = rows.flat();
+                    try {
+                        await client.query('BEGIN');
+                        for (let i = 0; i < newButtonList.length; i++) {
+                            const button = newButtonList[i];
+                            const finalRow = rows.find(r => r.some(b => b.id === button.id));
+                            const newIsFullWidth = finalRow.length === 1;
+                            await client.query('UPDATE public.buttons SET "order" = $1, is_full_width = $2 WHERE id = $3', [i, newIsFullWidth, button.id]);
+                        }
+                        await client.query('COMMIT');
+                        await refreshKeyboardView(ctx, userId, '✅ تم تحديث ترتيب الأزرار.');
+                        await ctx.answerCbQuery();
+                    } catch (e) {
+                        await client.query('ROLLBACK');
+                        console.error("Error updating button order:", e);
+                        await ctx.reply('❌ حدث خطأ أثناء تحديث الترتيب.');
+                    }
+                } else {
+                    await ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
+                }
+                return;
             }
-                }
+        }
 
         if (action === 'msg') {
             const msgAction = parts[1];
             const messageId = parts[2];
-
             const msgResult = await client.query('SELECT *, button_id FROM public.messages WHERE id = $1', [messageId]);
             if (msgResult.rows.length === 0) return ctx.answerCbQuery('الرسالة غير موجودة');
             
             const messageToHandle = msgResult.rows[0];
             const buttonId = messageToHandle.button_id;
-
             const messagesResult = await client.query('SELECT * FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]);
             const messages = messagesResult.rows;
             const messageIndex = messages.findIndex(msg => msg.id === messageId);
@@ -1414,10 +1362,10 @@ bot.on('callback_query', async (ctx) => {
                 const targetMessageResult = await client.query('SELECT id, "order" FROM public.messages WHERE button_id = $1 AND "order" = $2', [buttonId, newOrder]);
                 const targetMessage = targetMessageResult.rows[0];
                 if (targetMessage) {
-                    await client.query('BEGIN'); // Start transaction
+                    await client.query('BEGIN');
                     await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [targetMessage.order, currentMessage.id]);
                     await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [currentMessage.order, targetMessage.id]);
-                    await client.query('COMMIT'); // Commit transaction
+                    await client.query('COMMIT');
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
                     return ctx.answerCbQuery();
@@ -1430,7 +1378,7 @@ bot.on('callback_query', async (ctx) => {
                  await ctx.answerCbQuery();
                  return ctx.reply("📝 أرسل أو وجّه المحتوى الجديد :", { reply_markup: { force_reply: true } });
             }
-             if (msgAction === 'edit_caption') {
+            if (msgAction === 'edit_caption') {
                 await updateUserState(userId, { state: 'AWAITING_NEW_CAPTION', stateData: { messageId: messageId, buttonId: buttonId } });
                 await ctx.answerCbQuery();
                 return ctx.reply("📝 أرسل أو وجّه رسالة تحتوي على الشرح الجديد:", { reply_markup: { force_reply: true } });
@@ -1446,13 +1394,14 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.answerCbQuery();
                 return ctx.reply("📝 أرسل أو وجّه الرسالة التالية:", { reply_markup: { force_reply: true } });
             }
-        } 
-      }
-     catch (error) {
+        }
+    } catch (error) {
         console.error("FATAL ERROR in callback_query handler:", error);
         console.error("Caused by callback_query data:", JSON.stringify(ctx.update.callback_query, null, 2));
         await ctx.answerCbQuery("حدث خطأ فادح.", { show_alert: true });
-    } finally { client.release(); }
+    } finally { 
+        client.release(); 
+    }
 });
 
 // --- Vercel Webhook Setup ---
