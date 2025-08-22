@@ -468,6 +468,7 @@ bot.command('ban', (ctx) => handleBanUnban(ctx, true));
 bot.command('unban', (ctx) => handleBanUnban(ctx, false));
 
 // أمر عرض معلومات المستخدم
+// أمر عرض معلومات المستخدم (بالتنسيق النهائي والمفصل)
 bot.command('info', async (ctx) => {
     const client = await getClient();
     try {
@@ -484,47 +485,47 @@ bot.command('info', async (ctx) => {
         const targetUser = ctx.message.reply_to_message.forward_from;
         const targetId = String(targetUser.id);
         const targetName = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+        const targetUsername = targetUser.username ? `@${targetUser.username}` : 'لا يوجد';
 
-        // جلب كل البيانات المطلوبة بالتوازي لتحسين الأداء
         const [
             botUserResult,
             clicksTodayResult,
             buttonsVisitedResult
         ] = await Promise.all([
-            // 1. جلب آخر نشاط من جدول المستخدمين
             client.query('SELECT last_active FROM public.users WHERE id = $1', [targetId]),
-            
-            // 2. حساب عدد الضغطات اليوم
             client.query(`
                 SELECT COUNT(*) FROM public.button_clicks_log 
                 WHERE user_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
             `, [targetId]),
 
-            // 3. جلب قائمة الأزرار الفريدة التي زارها اليوم
+            // ✨ تعديل هنا: الاستعلام الآن يحسب عدد الضغطات لكل زر ✨
             client.query(`
-                SELECT DISTINCT b.text 
+                SELECT b.text, COUNT(l.id) as click_count
                 FROM public.buttons b 
                 JOIN public.button_clicks_log l ON b.id = l.button_id 
                 WHERE l.user_id = $1 AND (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+                GROUP BY b.text
+                ORDER BY click_count DESC
             `, [targetId])
         ]);
 
-        // معالجة النتائج
         const lastActive = botUserResult.rows[0]?.last_active;
         const clicksToday = clicksTodayResult.rows[0].count;
-        const buttonsVisited = buttonsVisitedResult.rows.map(r => r.text).join('، ') || 'لم يزر أي أزرار اليوم';
         
-        // تنسيق التاريخ ليكون سهل القراءة
+        // ✨ تعديل هنا: تنسيق قائمة الأزرار مع عدد الضغطات ✨
+        const buttonsVisited = buttonsVisitedResult.rows.length > 0 
+            ? buttonsVisitedResult.rows.map(r => `- ${r.text} (${r.click_count} ضغطة)`).join('\n') 
+            : 'لم يزر أي أزرار اليوم';
+        
         const lastActiveFormatted = lastActive 
-            ? new Date(lastActive).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' })
+            ? new Date(lastActive).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', weekday: 'long', dateStyle: 'medium', timeStyle: 'short' })
             : 'غير معروف';
 
-        // بناء التقرير النهائي
         const userInfoReport = `📋 <b>تقرير المستخدم: ${targetName}</b>\n` +
-                             `<b>ID:</b> <code>${targetId}</code>\n\n` +
+                             `<b>المعرف:</b> ${targetUsername} (<code>${targetId}</code>)\n\n` +
                              `🕒 <b>آخر نشاط:</b> ${lastActiveFormatted}\n` +
-                             `🖱️ <b>عدد الضغطات (اليوم):</b> ${clicksToday}\n\n` +
-                             `🔘 <b>الأزرار التي زارها (اليوم):</b>\n` +
+                             `🖱️ <b>إجمالي الضغطات (اليوم):</b> ${clicksToday}\n\n` +
+                             `🔘 <b>تفاصيل نشاط الأزرار (اليوم):</b>\n` +
                              `${buttonsVisited}`;
 
         await ctx.replyWithHTML(userInfoReport);
