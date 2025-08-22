@@ -93,30 +93,16 @@ async function processAndFormatTopButtons(interval) {
     try {
         let title = '';
         let query;
+        const todayDate = new Date().toISOString().split('T')[0];
 
-        const todayDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-
+        // منطق اليومي يبقى كما هو لأنه يعتمد على السجل المباشر الدقيق
         if (interval === 'daily') {
             title = '*🏆 الأكثر استخداماً (اليوم):*';
             query = `
-                WITH combined_today AS (
-                    -- جزء الأرشيف (إذا تم الأرشفة بالخطأ)
-                    SELECT b.id, b.text, s.total_clicks as clicks
-                    FROM public.buttons b
-                    JOIN public.daily_button_stats s ON b.id = s.button_id
-                    WHERE s.click_date = '${todayDate}'
-                    UNION ALL
-                    -- جزء السجل المباشر
-                    SELECT b.id, b.text, COUNT(l.id) as clicks
-                    FROM public.buttons b
-                    JOIN public.button_clicks_log l ON b.id = l.button_id
-                    GROUP BY b.id, b.text
-                )
-                SELECT text, SUM(clicks)::integer as clicks_count
-                FROM combined_today
-                GROUP BY text
-                ORDER BY clicks_count DESC
-                LIMIT 10;
+                SELECT b.text, COUNT(l.id) as clicks_count, COUNT(DISTINCT l.user_id) as unique_users
+                FROM public.buttons b JOIN public.button_clicks_log l ON b.id = l.button_id
+                WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+                GROUP BY b.text ORDER BY clicks_count DESC LIMIT 10;
             `;
         } else { // الأسبوعي والكلي
             let dateFilter = '';
@@ -126,35 +112,30 @@ async function processAndFormatTopButtons(interval) {
             } else {
                 title = '*🏆 الأكثر استخداماً (الكلي):*';
             }
+            // الكود الجديد يجمع عدد المستخدمين الفريدين من الأرشيف
             query = `
                 WITH combined_stats AS (
-                    SELECT b.id, b.text, SUM(s.total_clicks) as clicks
-                    FROM public.buttons b
-                    JOIN public.daily_button_stats s ON b.id = s.button_id
+                    SELECT b.id, b.text, SUM(s.total_clicks) as clicks, SUM(s.unique_users_count) as users
+                    FROM public.buttons b JOIN public.daily_button_stats s ON b.id = s.button_id
                     ${dateFilter}
                     GROUP BY b.id, b.text
                     UNION ALL
-                    SELECT b.id, b.text, COUNT(l.id) as clicks
-                    FROM public.buttons b
-                    JOIN public.button_clicks_log l ON b.id = l.button_id
+                    SELECT b.id, b.text, COUNT(l.id) as clicks, COUNT(DISTINCT l.user_id) as users
+                    FROM public.buttons b JOIN public.button_clicks_log l ON b.id = l.button_id
                     GROUP BY b.id, b.text
                 )
-                SELECT text, SUM(clicks)::integer as clicks_count
+                SELECT text, SUM(clicks)::integer as clicks_count, SUM(users)::integer as unique_users
                 FROM combined_stats
-                GROUP BY text
-                ORDER BY clicks_count DESC
-                LIMIT 10;
+                GROUP BY text ORDER BY clicks_count DESC LIMIT 10;
             `;
         }
 
         const { rows } = await client.query(query);
 
-        if (rows.length === 0) {
-            return `${title}\nلا توجد بيانات لعرضها.`;
-        }
+        if (rows.length === 0) return `${title}\nلا توجد بيانات لعرضها.`;
         
         const formattedRows = rows.map((row, index) =>
-            `${index + 1}. *${row.text}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\``
+            `${index + 1}. *${row.text}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\`\n   - 👤 المستخدمون: \`${row.unique_users || 0}\``
         ).join('\n\n');
 
         return `${title}\n${formattedRows}`;
