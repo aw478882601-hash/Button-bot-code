@@ -30,6 +30,16 @@ async function getClient() {
         throw error;
     }
 }
+// دالة مساعدة للحصول على ID المصدر سواء كان مستخدم، بوت، قناة، أو جروب
+function getSourceId(ctx) {
+    if (ctx.message.forward_from) { // Forwarded from a user or bot
+        return String(ctx.message.forward_from.id);
+    }
+    if (ctx.message.forward_from_chat) { // Forwarded from a channel or group
+        return String(ctx.message.forward_from_chat.id);
+    }
+    return null;
+}
 
 // دالة لتحديث حالة المستخدم وبياناته
 // دالة لتحديث حالة المستخدم وبياناته (النسخة النهائية والمحسّنة)
@@ -191,23 +201,26 @@ async function refreshKeyboardView(ctx, userId, confirmationMessage) {
         console.error('Error refreshing keyboard view:', error);
     }
 }
-// دالة لإنشاء لوحة المفاتيح
 async function generateKeyboard(userId) {
   const client = await getClient();
   try {
-    const userResult = await client.query('SELECT is_admin, current_path, state FROM public.users WHERE id = $1', [userId]);
+    const userResult = await client.query('SELECT is_admin, current_path, state, state_data FROM public.users WHERE id = $1', [userId]);
     if (userResult.rows.length === 0) return [[]];
     const { is_admin: isAdmin, current_path: currentPath, state } = userResult.rows[0];
     let keyboardRows = [];
 
+    // --- لوحات المفاتيح الخاصة بالحالات ---
+    if (state === 'DYNAMIC_TRANSFER') {
+        return [['✅ إنهاء وإضافة الكل', '❌ إلغاء العملية']];
+    }
     if (state === 'AWAITING_BULK_MESSAGES') {
         return [['✅ إنهاء الإضافة']];
     }
-
     if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
         keyboardRows.unshift(['✅ النقل إلى هنا', '❌ إلغاء النقل']);
     }
     
+    // --- لوحة مفاتيح قسم الإشراف ---
     if (currentPath === 'supervision') {
         keyboardRows = [
             ['📊 الإحصائيات', '🗣️ رسالة جماعية'],
@@ -218,6 +231,7 @@ async function generateKeyboard(userId) {
         return keyboardRows;
     }
 
+    // --- بناء لوحة المفاتيح الرئيسية ---
     let buttonsToRender;
     let query, values;
     if (currentPath === 'root') {
@@ -250,9 +264,14 @@ async function generateKeyboard(userId) {
 
     if (currentRow.length > 0) keyboardRows.push(currentRow);
 
+    // --- إضافة أزرار الإدارة ---
     if (isAdmin) {
         const adminActionRow = [];
-        if (state === 'EDITING_BUTTONS') { adminActionRow.push('➕ إضافة زر'); adminActionRow.push('✂️ نقل زر'); }
+        if (state === 'EDITING_BUTTONS') { 
+            adminActionRow.push('➕ إضافة زر'); 
+            adminActionRow.push('✂️ نقل زر');
+            adminActionRow.push('📥 نقل البيانات'); // الزر الجديد
+        }
         if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
             adminActionRow.push('➕ إضافة رسالة');
         }
@@ -578,6 +597,116 @@ const mainMessageHandler = async (ctx) => {
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
 
+       if (isAdmin && state === 'DYNAMIC_TRANSFER') {
+            const step = stateData.step;
+
+            // --- المرحلة 1: تحديد مصدر الأزرار ---
+            if (step === 'AWAITING_BUTTON_SOURCE') {
+                const buttonSourceId = getSourceId(ctx);
+                if (!buttonSourceId) return ctx.reply('⚠️ خطأ: يرجى إعادة توجيه رسالة صالحة.');
+                
+                await updateUserState(userId, { stateData: { ...stateData, step: 'AWAITING_CONTENT_SOURCE', buttonSourceId } });
+                return ctx.reply('✅ تم تحديد مصدر الأزرار.\n\n**الخطوة 2:** الآن قم بتوجيه رسالة من **مصدر المحتوى**.', Markup.keyboard(await generateKeyboard(userId)).resize());
+            }
+
+            // --- المرحلة 2: تحديد مصدر المحتوى ---
+            if (step === 'AWAITING_CONTENT_SOURCE') {
+                const contentSourceId = getSourceId(ctx);
+                if (!contentSourceId) return ctx.reply('⚠️ خطأ: يرجى إعادة توجيه رسالة صالحة.');
+
+                await updateUserState(userId, { 
+                    stateData: { ...stateData, step: 'AWAITING_NEXT_BUTTON', contentSourceId } 
+                });
+                return ctx.reply('✅ تم تحديد مصدر المحتوى.\n\n**🚀 أنت الآن جاهز!**\nابدأ الآن بتوجيه أول رسالة من **مصدر الزر** لبدء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
+            }
+
+            // --- المرحلة 3: تجميع البيانات بشكل ديناميكي ---
+            if (step === 'AWAITING_NEXT_BUTTON' || step === 'AWAITING_CONTENT') {
+                const sourceId = getSourceId(ctx);
+                if (!sourceId) return; // تجاهل الرسائل غير الموجهة
+                
+                // **الحالة أ: استقبال رسالة زر جديد**
+                if (sourceId === stateData.buttonSourceId) {
+                    // أولاً، تحقق إذا كان هناك زر سابق لم يكتمل ليتم حفظه
+                    if (stateData.currentButton && stateData.currentButton.content.length > 0) {
+                        const prevButton = stateData.currentButton;
+                        const updatedUnits = [...stateData.completedUnits, prevButton];
+                         await ctx.reply(`🔔 **اكتمل بناء الزر السابق!**\n- الزر: \`${prevButton.name}\`\n- المحتوى: \`${prevButton.content.length}\` رسالة.\n\n✅ تم حفظه مؤقتاً.`);
+                        await updateUserState(userId, { stateData: { ...stateData, completedUnits: updatedUnits, currentButton: null } });
+                    }
+
+                    const buttonName = ctx.message.text || ctx.message.caption;
+                    if (!buttonName) return ctx.reply('⚠️ تم تجاهل رسالة الزر، لا تحتوي على نص أو تعليق.');
+
+                    const newButton = { name: buttonName, content: [] };
+                    await updateUserState(userId, { 
+                        stateData: { ...stateData, step: 'AWAITING_CONTENT', currentButton: newButton } 
+                    });
+                    return ctx.reply(`👍 تم استلام الزر **"${buttonName}"**. الآن قم بتوجيه رسائل المحتوى الخاصة به.`);
+                }
+
+                // **الحالة ب: استقبال رسالة محتوى**
+                if (sourceId === stateData.contentSourceId) {
+                    if (step !== 'AWAITING_CONTENT' || !stateData.currentButton) {
+                        return ctx.reply('⚠️ خطأ: يجب أن تبدأ بزر أولاً. قم بتوجيه رسالة من مصدر الأزرار.');
+                    }
+                    
+                    // تحليل الرسالة
+                    let type, content, caption = '', entities = [];
+                    if (ctx.message.text) { type = "text"; content = ctx.message.text; entities = ctx.message.entities || []; }
+                    else if (ctx.message.photo) { type = "photo"; content = ctx.message.photo.pop().file_id; caption = ctx.message.caption || ''; entities = ctx.message.caption_entities || []; }
+                    else if (ctx.message.video) { type = "video"; content = ctx.message.video.file_id; caption = ctx.message.caption || ''; entities = ctx.message.caption_entities || []; }
+                    else if (ctx.message.document) { type = "document"; content = ctx.message.document.file_id; caption = ctx.message.caption || ''; entities = ctx.message.caption_entities || []; }
+                    else { return ctx.reply('⚠️ نوع رسالة المحتوى غير مدعوم حاليًا.'); }
+                    
+                    const messageObject = { type, content, caption, entities: entities || [] };
+                    const updatedContent = [...stateData.currentButton.content, messageObject];
+                    const updatedButton = { ...stateData.currentButton, content: updatedContent };
+
+                    await updateUserState(userId, { stateData: { ...stateData, currentButton: updatedButton } });
+                    await ctx.reply(`📥 تمت إضافة المحتوى (${updatedContent.length}) للزر النشط.`);
+                    return; // أضف return هنا لتجنب تنفيذ الكود التالي
+                }
+            }
+
+            // --- المرحلة 4: عند الضغط على زر الإنهاء ---
+            if (ctx.message && ctx.message.text === '✅ إنهاء وإضافة الكل') {
+                let finalUnits = [...stateData.completedUnits];
+                if (stateData.currentButton && stateData.currentButton.content.length > 0) {
+                    finalUnits.push(stateData.currentButton);
+                     await ctx.reply(`🔔 **اكتمل بناء الزر الأخير!**\n- الزر: \`${stateData.currentButton.name}\`\n- المحتوى: \`${stateData.currentButton.content.length}\` رسالة.`);
+                }
+
+                if (finalUnits.length === 0) {
+                     await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
+                    return ctx.reply('لم يتم بناء أي أزرار مكتملة. تم الخروج من وضع النقل.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                }
+
+                const statusMessage = await ctx.reply(`⏳ جاري إضافة ${finalUnits.length} زر مع محتوياتها إلى قاعدة البيانات...`);
+
+                const parentId = currentPath === 'root' ? null : currentPath.split('/').pop();
+                const lastOrderResult = await client.query('SELECT COALESCE(MAX("order"), -1) AS max_order FROM public.buttons WHERE parent_id ' + (parentId ? '= $1' : 'IS NULL'), parentId ? [parentId] : []);
+                let btnOrder = lastOrderResult.rows[0].max_order;
+
+                for (const unit of finalUnits) {
+                    btnOrder++;
+                    const insertResult = await client.query('INSERT INTO public.buttons (text, parent_id, "order", is_full_width) VALUES ($1, $2, $3, $4) RETURNING id', [unit.name, parentId, btnOrder, true]);
+                    const newButtonId = insertResult.rows[0].id;
+                    
+                    let msgOrder = -1;
+                    for (const msg of unit.content) {
+                        msgOrder++;
+                        await client.query('INSERT INTO public.messages (button_id, "order", type, content, caption, entities) VALUES ($1, $2, $3, $4, $5, $6)', [newButtonId, msgOrder, msg.type, msg.content, msg.caption, JSON.stringify(msg.entities)]);
+                    }
+                }
+                
+                await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `🎉 اكتملت العملية! تم إضافة ${finalUnits.length} زر بنجاح.`);
+                await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
+                await refreshKeyboardView(ctx, userId, 'تم تحديث لوحة المفاتيح.');
+                return;
+            }
+            return; // لمنع تنفيذ أي كود آخر
+        }
         if (state === 'AWAITING_BULK_MESSAGES') {
             const { buttonId, collectedMessages = [] } = stateData;
 
@@ -1056,6 +1185,24 @@ const mainMessageHandler = async (ctx) => {
                 if (isAdmin && state === 'EDITING_BUTTONS') {
                     await updateUserState(userId, { state: 'AWAITING_SOURCE_BUTTON_TO_MOVE' });
                     return ctx.reply('✂️ الخطوة 1: اختر الزر الذي تريد نقله (المصدر).');
+                }
+                break;
+            case '📥 نقل البيانات':
+                if (isAdmin && state === 'EDITING_BUTTONS') {
+                    await updateUserState(userId, { 
+                        state: 'DYNAMIC_TRANSFER', 
+                        stateData: { 
+                            step: 'AWAITING_BUTTON_SOURCE',
+                            completedUnits: [] // لتخزين الوحدات المكتملة (زر + محتواه)
+                        }
+                    });
+                    return ctx.reply('📥 **وضع النقل الديناميكي**\n\n**الخطوة 1:** قم بإعادة توجيه أي رسالة من (القناة أو الجروب أو البوت) الذي يمثل **مصدر الأزرار**.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                }
+                break;
+            case '❌ إلغاء العملية':
+                if (isAdmin && state === 'DYNAMIC_TRANSFER') {
+                    await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
+                    return ctx.reply('👍 تم إلغاء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 }
                 break;
             case '✅ النقل إلى هنا':
