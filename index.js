@@ -422,6 +422,121 @@ bot.start(async (ctx) => {
     finally { client.release(); }
 });
 
+// --- أوامر الإدارة الجديدة (حظر، فك حظر، معلومات) ---
+
+// دالة مساعدة للتعامل مع الحظر وفك الحظر
+async function handleBanUnban(ctx, banAction) {
+    const client = await getClient();
+    try {
+        const adminId = String(ctx.from.id);
+        const userResult = await client.query('SELECT is_admin FROM public.users WHERE id = $1', [adminId]);
+        if (!userResult.rows[0]?.is_admin) {
+            return; // ليس مشرفًا
+        }
+
+        if (!ctx.message.reply_to_message || !ctx.message.reply_to_message.forward_from) {
+            return ctx.reply('⚠️ للاستخدام الصحيح، قم بالرد على رسالة مُعادة توجيهها من المستخدم بالأمر /ban أو /unban.');
+        }
+
+        const targetUser = ctx.message.reply_to_message.forward_from;
+        const targetId = String(targetUser.id);
+        const targetName = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+
+        if (targetId === process.env.SUPER_ADMIN_ID) {
+            return ctx.reply('🚫 لا يمكن حظر أو فك حظر الأدمن الرئيسي.');
+        }
+
+        await client.query(`UPDATE public.users SET banned = $1 WHERE id = $2`, [banAction, targetId]);
+        
+        if (banAction) {
+            await ctx.reply(`🚫 تم حظر المستخدم *${targetName}* (<code>${targetId}</code>) بنجاح.`, { parse_mode: 'Markdown' });
+            await bot.telegram.sendMessage(targetId, '🚫 لقد تم حظرك من استخدام هذا البوت.').catch(e => console.error(e.message));
+        } else {
+            await ctx.reply(`✅ تم فك حظر المستخدم *${targetName}* (<code>${targetId}</code>) بنجاح.`, { parse_mode: 'Markdown' });
+        }
+    } catch (error) {
+        console.error("Error in ban/unban command:", error);
+    } finally {
+        client.release();
+    }
+}
+
+// أمر الحظر
+bot.command('ban', (ctx) => handleBanUnban(ctx, true));
+
+// أمر فك الحظر
+bot.command('unban', (ctx) => handleBanUnban(ctx, false));
+
+// أمر عرض معلومات المستخدم
+bot.command('info', async (ctx) => {
+    const client = await getClient();
+    try {
+        const adminId = String(ctx.from.id);
+        const userResult = await client.query('SELECT is_admin FROM public.users WHERE id = $1', [adminId]);
+        if (!userResult.rows[0]?.is_admin) {
+            return; // ليس مشرفًا
+        }
+
+        if (!ctx.message.reply_to_message || !ctx.message.reply_to_message.forward_from) {
+            return ctx.reply('⚠️ للاستخدام الصحيح، قم بالرد على رسالة مُعادة توجيهها من المستخدم بالأمر /info.');
+        }
+
+        const targetUser = ctx.message.reply_to_message.forward_from;
+        const targetId = String(targetUser.id);
+        const targetName = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+
+        // جلب كل البيانات المطلوبة بالتوازي لتحسين الأداء
+        const [
+            botUserResult,
+            clicksTodayResult,
+            buttonsVisitedResult
+        ] = await Promise.all([
+            // 1. جلب آخر نشاط من جدول المستخدمين
+            client.query('SELECT last_active FROM public.users WHERE id = $1', [targetId]),
+            
+            // 2. حساب عدد الضغطات اليوم
+            client.query(`
+                SELECT COUNT(*) FROM public.button_clicks_log 
+                WHERE user_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+            `, [targetId]),
+
+            // 3. جلب قائمة الأزرار الفريدة التي زارها اليوم
+            client.query(`
+                SELECT DISTINCT b.text 
+                FROM public.buttons b 
+                JOIN public.button_clicks_log l ON b.id = l.button_id 
+                WHERE l.user_id = $1 AND (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+            `, [targetId])
+        ]);
+
+        // معالجة النتائج
+        const lastActive = botUserResult.rows[0]?.last_active;
+        const clicksToday = clicksTodayResult.rows[0].count;
+        const buttonsVisited = buttonsVisitedResult.rows.map(r => r.text).join('، ') || 'لم يزر أي أزرار اليوم';
+        
+        // تنسيق التاريخ ليكون سهل القراءة
+        const lastActiveFormatted = lastActive 
+            ? new Date(lastActive).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' })
+            : 'غير معروف';
+
+        // بناء التقرير النهائي
+        const userInfoReport = `📋 <b>تقرير المستخدم: ${targetName}</b>\n` +
+                             `<b>ID:</b> <code>${targetId}</code>\n\n` +
+                             `🕒 <b>آخر نشاط:</b> ${lastActiveFormatted}\n` +
+                             `🖱️ <b>عدد الضغطات (اليوم):</b> ${clicksToday}\n\n` +
+                             `🔘 <b>الأزرار التي زارها (اليوم):</b>\n` +
+                             `${buttonsVisited}`;
+
+        await ctx.replyWithHTML(userInfoReport);
+
+    } catch (error) {
+        console.error("Error in /info command:", error);
+        await ctx.reply('حدث خطأ أثناء جلب بيانات المستخدم.');
+    } finally {
+        client.release();
+    }
+});
+
 const mainMessageHandler = async (ctx) => {
     const client = await getClient();
     try {
