@@ -1354,7 +1354,7 @@ bot.on('callback_query', async (ctx) => {
                         [rows[targetRowIndex][0], rows[targetRowIndex][1]] = [rows[targetRowIndex][1], rows[targetRowIndex][0]];
                         actionTaken = true;
                     }
-                }
+                
 
                 // 5. إذا تم التحريك بنجاح، قم بتحديث قاعدة البيانات
                if (actionTaken) {
@@ -1382,10 +1382,9 @@ bot.on('callback_query', async (ctx) => {
     }
 } else {
     await ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
-}
-                       
-            // --- نهاية الجزء المضاف ---
-        }
+                 return;
+            }
+                }
 
         if (action === 'msg') {
             const msgAction = parts[1];
