@@ -1146,7 +1146,7 @@ bot.on('callback_query', async (ctx) => {
                 await client.query('DELETE FROM public.buttons WHERE id = $1', [buttonId]);
                 await ctx.deleteMessage().catch(()=>{});
                 await ctx.reply('🗑️ تم الحذف بنجاح. تم تحديث لوحة المفاتيح.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                return ctx.answerCbQuery('✅ تم الحذف');
+                
             }
         }
 
@@ -1366,8 +1366,8 @@ bot.on('callback_query', async (ctx) => {
                         
                         await client.query('COMMIT'); // حفظ التغييرات
                         
-                        
                         await ctx.reply('✅ تم تحديث ترتيب الأزرار.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                        
                     } catch (e) {
                         await client.query('ROLLBACK'); // تراجع في حالة حدوث خطأ
                         console.error("Error updating button order:", e);
@@ -1377,7 +1377,7 @@ bot.on('callback_query', async (ctx) => {
                     await ctx.answerCbQuery('لا يمكن تحريك الزر أكثر.', { show_alert: true });
                 }
                 return;
-            }
+                       
             // --- نهاية الجزء المضاف ---
         }
 
