@@ -93,17 +93,17 @@ async function processAndFormatTopButtons(interval) {
     try {
         let title = '';
         let query;
-        const todayDate = new Date().toISOString().split('T')[0];
 
-        // منطق اليومي يبقى كما هو لأنه يعتمد على السجل المباشر الدقيق
+        // استعلام دقيق لبيانات اليوم فقط (يبحث في المكانين)
+        const dailyQueryPart = `
+            SELECT b.id, b.text, COUNT(l.id) as clicks, COUNT(DISTINCT l.user_id) as users
+            FROM public.buttons b JOIN public.button_clicks_log l ON b.id = l.button_id
+            GROUP BY b.id, b.text
+        `;
+
         if (interval === 'daily') {
             title = '*🏆 الأكثر استخداماً (اليوم):*';
-            query = `
-                SELECT b.text, COUNT(l.id) as clicks_count, COUNT(DISTINCT l.user_id) as unique_users
-                FROM public.buttons b JOIN public.button_clicks_log l ON b.id = l.button_id
-                WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
-                GROUP BY b.text ORDER BY clicks_count DESC LIMIT 10;
-            `;
+            query = `SELECT text, SUM(clicks)::integer as clicks_count, SUM(users)::integer as unique_users FROM (${dailyQueryPart}) as daily_data GROUP BY text ORDER BY clicks_count DESC LIMIT 10;`;
         } else { // الأسبوعي والكلي
             let dateFilter = '';
             if (interval === 'weekly') {
@@ -112,17 +112,17 @@ async function processAndFormatTopButtons(interval) {
             } else {
                 title = '*🏆 الأكثر استخداماً (الكلي):*';
             }
-            // الكود الجديد يجمع عدد المستخدمين الفريدين من الأرشيف
+            
             query = `
                 WITH combined_stats AS (
+                    -- جزء الأرشيف (مع فلترة التاريخ)
                     SELECT b.id, b.text, SUM(s.total_clicks) as clicks, SUM(s.unique_users_count) as users
                     FROM public.buttons b JOIN public.daily_button_stats s ON b.id = s.button_id
                     ${dateFilter}
                     GROUP BY b.id, b.text
                     UNION ALL
-                    SELECT b.id, b.text, COUNT(l.id) as clicks, COUNT(DISTINCT l.user_id) as users
-                    FROM public.buttons b JOIN public.button_clicks_log l ON b.id = l.button_id
-                    GROUP BY b.id, b.text
+                    -- جزء السجل المباشر (لليوم الحالي فقط)
+                    ${dailyQueryPart}
                 )
                 SELECT text, SUM(clicks)::integer as clicks_count, SUM(users)::integer as unique_users
                 FROM combined_stats
@@ -1195,24 +1195,27 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.answerCbQuery(`الزر الآن ${adminOnly ? 'للمشرفين فقط' : 'للجميع'}`);
                 return;
             }
-           if (subAction === 'stats') {
-    const todayDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+          if (subAction === 'stats') {
+    const todayDate = new Date().toISOString().split('T')[0];
 
-    // 1. جلب إحصائيات اليوم (من السجل المباشر + الأرشيف)
-    const todayResultLive = await client.query(`SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users FROM public.button_clicks_log WHERE button_id = $1`, [buttonId]);
-    const todayResultArchive = await client.query(`SELECT total_clicks as clicks FROM public.daily_button_stats WHERE button_id = $1 AND click_date = $2`, [buttonId, todayDate]);
-
-    // 2. جلب الإحصائيات التاريخية (من الأرشيف فقط)
-    const historicalResult = await client.query(`SELECT SUM(total_clicks) as clicks FROM public.daily_button_stats WHERE button_id = $1 AND click_date <> $2`, [buttonId, todayDate]);
-
-    const dailyClicksLive = parseInt(todayResultLive.rows[0].clicks || 0);
-    const dailyClicksArchive = parseInt(todayResultArchive.rows[0]?.clicks || 0);
-    const dailyClicks = dailyClicksLive + dailyClicksArchive;
-
-    const dailyUsers = parseInt(todayResultLive.rows[0].users || 0); // ملاحظة: عدد المستخدمين الفريدين لليوم سيأتي من السجل المباشر فقط
+    // 1. جلب إحصائيات اليوم (من السجل المباشر)
+    const todayResultLive = await client.query(`
+        SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users FROM public.button_clicks_log 
+        WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (now() AT TIME ZONE 'Africa/Cairo')::date`, 
+    [buttonId]);
     
+    // 2. جلب إحصائيات اليوم التي قد تكون أُرشفت بالخطأ
+    const todayResultArchive = await client.query(`SELECT total_clicks as clicks, unique_users_count as users FROM public.daily_button_stats WHERE button_id = $1 AND click_date = $2`, [buttonId, todayDate]);
+
+    // 3. جلب الإحصائيات التاريخية
+    const historicalResult = await client.query(`SELECT SUM(total_clicks) as clicks, SUM(unique_users_count) as users FROM public.daily_button_stats WHERE button_id = $1 AND click_date <> $2`, [buttonId, todayDate]);
+
+    // تجميع النتائج
+    const dailyClicks = parseInt(todayResultLive.rows[0].clicks || 0) + parseInt(todayResultArchive.rows[0]?.clicks || 0);
+    const dailyUsers = parseInt(todayResultLive.rows[0].users || 0) + parseInt(todayResultArchive.rows[0]?.users || 0);
     const historicalClicks = parseInt(historicalResult.rows[0].clicks || 0);
     const totalClicks = dailyClicks + historicalClicks;
+    const totalUsers = dailyUsers + parseInt(historicalResult.rows[0].users || 0);
 
     const buttonTextResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
     const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
@@ -1221,8 +1224,9 @@ bot.on('callback_query', async (ctx) => {
         `👆 <b>الضغطات:</b>\n` +
         `  - اليوم: <code>${dailyClicks}</code>\n` +
         `  - الكلي: <code>${totalClicks}</code>\n\n` +
-        `👤 <b>المستخدمون (اليوم):</b>\n` +
-        `  - اليوم: <code>${dailyUsers}</code>`;
+        `👤 <b>المستخدمون:</b>\n` +
+        `  - اليوم: <code>${dailyUsers}</code>\n` +
+        `  - الكلي: <code>${totalUsers}</code>`;
     
     await ctx.answerCbQuery();
     await ctx.replyWithHTML(statsMessage);
