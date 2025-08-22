@@ -183,7 +183,14 @@ async function refreshAdminView(ctx, userId, buttonId, confirmationMessage = '�
         client.release();
     }
 }
-
+// دالة جديدة مخصصة فقط لتحديث لوحة المفاتيح
+async function refreshKeyboardView(ctx, userId, confirmationMessage) {
+    try {
+        await ctx.reply(confirmationMessage, Markup.keyboard(await generateKeyboard(userId)).resize());
+    } catch (error) {
+        console.error('Error refreshing keyboard view:', error);
+    }
+}
 // دالة لإنشاء لوحة المفاتيح
 async function generateKeyboard(userId) {
   const client = await getClient();
