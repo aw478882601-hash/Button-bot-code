@@ -1442,6 +1442,7 @@ bot.on('callback_query', async (ctx) => {
                 return ctx.reply("📝 أرسل أو وجّه الرسالة التالية:", { reply_markup: { force_reply: true } });
             }
         } 
+      }
      catch (error) {
         console.error("FATAL ERROR in callback_query handler:", error);
         console.error("Caused by callback_query data:", JSON.stringify(ctx.update.callback_query, null, 2));
