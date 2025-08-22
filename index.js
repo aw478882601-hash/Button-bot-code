@@ -943,7 +943,7 @@ const mainMessageHandler = async (ctx) => {
         if (currentPath === 'supervision' && isAdmin) {
              switch (text) {
                 case '📊 الإحصائيات': {
-                    const waitingMessage = await ctx.reply('⏳ جارٍ تجميع كافة الإحصائيات والتقارير المتقدمة، يرجى الانتظار...');
+                    
 
                     // تشغيل جلب جميع الإحصائيات بالتوازي لتحسين السرعة
                     const [
@@ -985,8 +985,8 @@ const mainMessageHandler = async (ctx) => {
 
                     // تجميع كل التقارير في رسالة واحدة
                     const finalReport = `${generalStats}\n\n---\n\n${topDaily}\n\n---\n\n${topWeekly}\n\n---\n\n${topAllTime}\n\n---\n\n${inactiveUsersReport}`;
+                    await ctx.reply(finalReport, { parse_mode: 'Markdown' });
                     
-                    await ctx.telegram.editMessageText(ctx.chat.id, waitingMessage.message_id, undefined, finalReport, { parse_mode: 'Markdown' });
                     
                     return;
                 }
