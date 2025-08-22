@@ -1178,7 +1178,7 @@ const mainMessageHandler = async (ctx) => {
     }
 
     return ctx.replyWithHTML(bannedListMessage);
-}
+
         }
 
         const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
