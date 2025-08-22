@@ -1354,7 +1354,7 @@ bot.on('callback_query', async (ctx) => {
                         [rows[targetRowIndex][0], rows[targetRowIndex][1]] = [rows[targetRowIndex][1], rows[targetRowIndex][0]];
                         actionTaken = true;
                     }
-                
+                }
 
                 // 5. إذا تم التحريك بنجاح، قم بتحديث قاعدة البيانات
                if (actionTaken) {
