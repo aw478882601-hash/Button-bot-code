@@ -1267,7 +1267,7 @@ const mainMessageHandler = async (ctx) => {
         } else {
             return ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
-        }
+        
     } catch (error) {
         console.error("FATAL ERROR in mainMessageHandler:", error);
         console.error("Caused by update:", JSON.stringify(ctx.update, null, 2));
