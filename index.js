@@ -87,42 +87,66 @@ async function trackSentMessages(userId, messageIds) {
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية وتوقيت مصر)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم إصلاح توقيت اليوم)
-// دالة لتجميع ومعالجة إحصائيات الأزرار (النسخة النهائية مع نظام التجميع ومعالجة بيانات اليوم)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
         let title = '';
         let query;
 
-        // استعلام دقيق لبيانات اليوم فقط (يبحث في المكانين)
-        const dailyQueryPart = `
+        // جزء ثابت لجلب إحصائيات اليوم المباشرة (من السجل الخام)
+        const dailyLiveQueryPart = `
             SELECT b.id, b.text, COUNT(l.id) as clicks, COUNT(DISTINCT l.user_id) as users
-            FROM public.buttons b JOIN public.button_clicks_log l ON b.id = l.button_id
+            FROM public.buttons b
+            JOIN public.button_clicks_log l ON b.id = l.button_id
+            -- الشرط الأساسي: فلترة بيانات اليوم فقط
+            WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
             GROUP BY b.id, b.text
+        `;
+        
+        // جزء ثابت لجلب إحصائيات اليوم المؤرشفة (في حالة الأرشفة اليدوية الخاطئة)
+        const dailyArchivedQueryPart = `
+            SELECT b.id, b.text, s.total_clicks as clicks, s.unique_users_count as users
+            FROM public.buttons b
+            JOIN public.daily_button_stats s ON b.id = s.button_id
+            WHERE s.click_date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
         `;
 
         if (interval === 'daily') {
             title = '*🏆 الأكثر استخداماً (اليوم):*';
-            query = `SELECT text, SUM(clicks)::integer as clicks_count, SUM(users)::integer as unique_users FROM (${dailyQueryPart}) as daily_data GROUP BY text ORDER BY clicks_count DESC LIMIT 10;`;
+            // نجمع بين السجل المباشر والأرشيف لبيانات اليوم فقط
+            query = `
+                WITH combined_today AS (
+                    ${dailyLiveQueryPart}
+                    UNION ALL
+                    ${dailyArchivedQueryPart}
+                )
+                SELECT text, SUM(clicks)::integer as clicks_count, SUM(users)::integer as unique_users
+                FROM combined_today
+                GROUP BY text ORDER BY clicks_count DESC LIMIT 10;
+            `;
         } else { // الأسبوعي والكلي
             let dateFilter = '';
             if (interval === 'weekly') {
                 title = '*🏆 الأكثر استخداماً (أسبوعياً):*';
-                dateFilter = `WHERE s.click_date >= date_trunc('week', now() AT TIME ZONE 'Africa/Cairo')`;
+                // الفلترة هنا تستبعد اليوم الحالي لأنه سيُضاف من السجل المباشر
+                dateFilter = `WHERE s.click_date >= date_trunc('week', now() AT TIME ZONE 'Africa/Cairo') AND s.click_date < (NOW() AT TIME ZONE 'Africa/Cairo')::date`;
             } else {
                 title = '*🏆 الأكثر استخداماً (الكلي):*';
+                 dateFilter = `WHERE s.click_date < (NOW() AT TIME ZONE 'Africa/Cairo')::date`;
             }
-            
+
             query = `
                 WITH combined_stats AS (
-                    -- جزء الأرشيف (مع فلترة التاريخ)
+                    -- الأرشيف التاريخي (بدون اليوم)
                     SELECT b.id, b.text, SUM(s.total_clicks) as clicks, SUM(s.unique_users_count) as users
                     FROM public.buttons b JOIN public.daily_button_stats s ON b.id = s.button_id
                     ${dateFilter}
                     GROUP BY b.id, b.text
                     UNION ALL
-                    -- جزء السجل المباشر (لليوم الحالي فقط)
-                    ${dailyQueryPart}
+                    -- بيانات اليوم الكاملة (مباشر + مؤرشف)
+                    ${dailyLiveQueryPart}
+                    UNION ALL
+                    ${dailyArchivedQueryPart}
                 )
                 SELECT text, SUM(clicks)::integer as clicks_count, SUM(users)::integer as unique_users
                 FROM combined_stats
