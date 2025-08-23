@@ -40,7 +40,44 @@ function getSourceId(ctx) {
     }
     return null;
 }
+// دالة مساعدة لنسخ زر وكل محتوياته وأزراره الفرعية بشكل متكرر
+async function deepCopyButton(originalButtonId, newParentId, client) {
+    // 1. جلب بيانات الزر الأصلي
+    const originalButtonDetailsResult = await client.query('SELECT * FROM public.buttons WHERE id = $1', [originalButtonId]);
+    if (originalButtonDetailsResult.rows.length === 0) return; // توقف إذا لم يتم العثور على الزر
+    const details = originalButtonDetailsResult.rows[0];
 
+    // 2. إنشاء نسخة جديدة من الزر في المكان الجديد
+    // يتم حساب الترتيب تلقائيًا ليكون آخر زر في القسم الجديد
+    const lastOrderResult = await client.query(
+        'SELECT COALESCE(MAX("order"), -1) AS max_order FROM public.buttons WHERE parent_id ' + (newParentId ? '= $1' : 'IS NULL'),
+        newParentId ? [newParentId] : []
+    );
+    const newOrder = lastOrderResult.rows[0].max_order + 1;
+
+    const newButtonResult = await client.query(
+        'INSERT INTO public.buttons (text, parent_id, "order", is_full_width, admin_only) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [details.text, newParentId, newOrder, details.is_full_width, details.admin_only]
+    );
+    const newButtonId = newButtonResult.rows[0].id;
+
+    // 3. نسخ كل الرسائل من الزر الأصلي إلى الزر الجديد
+    const messagesResult = await client.query('SELECT * FROM public.messages WHERE button_id = $1 ORDER BY "order"', [originalButtonId]);
+    for (const msg of messagesResult.rows) {
+        await client.query(
+            'INSERT INTO public.messages (button_id, "order", type, content, caption, entities) VALUES ($1, $2, $3, $4, $5, $6)',
+            [newButtonId, msg.order, msg.type, msg.content, msg.caption, JSON.stringify(msg.entities || [])]
+        );
+    }
+
+    // 4. البحث عن كل الأزرار الفرعية للزر الأصلي
+    const subButtonsResult = await client.query('SELECT id FROM public.buttons WHERE parent_id = $1 ORDER BY "order"', [originalButtonId]);
+
+    // 5. الخطوة التكرارية (Recursion): استدعاء نفس الدالة لكل زر فرعي
+    for (const subButton of subButtonsResult.rows) {
+        await deepCopyButton(subButton.id, newButtonId, client);
+    }
+}
 // دالة لتحديث حالة المستخدم وبياناته
 // دالة لتحديث حالة المستخدم وبياناته (النسخة النهائية والمحسّنة)
 async function updateUserState(userId, updates) {
@@ -279,11 +316,13 @@ async function generateKeyboard(userId) {
     // ==========================================================
     // --- إضافة أزرار الإدارة ---
     if (isAdmin) {
-        // التعامل مع حالة تعديل الأزرار بشكل خاص لتقسيمها على صفين
         if (state === 'EDITING_BUTTONS') { 
-            keyboardRows.push(['➕ إضافة زر', '✂️ نقل أزرار']); // الصف الأول
-            keyboardRows.push(['📥 نسخ أزرار', '📥 نقل البيانات']);   // الصف الثاني
+            // الصف الأول
+            keyboardRows.push(['📥 نقل البيانات', '➕ إضافة زر']);
+            // الصف الثاني
+            keyboardRows.push(['✂️ نقل أزرار', '📥 نسخ أزرار']);
         }
+
 
         // التعامل مع باقي أزرار الإدارة
         const otherAdminActions = [];
@@ -1017,17 +1056,32 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                 await updateUserState(userId, { state: 'NORMAL' });
                 return;
             }
-            
-           if (state === 'AWAITING_NEW_BUTTON_NAME') {
+            if (state === 'AWAITING_NEW_BUTTON_NAME') {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال نص يحتوي على أسماء الأزرار.');
 
                 const reservedNames = [
-                    '🔝 القائمة الرئيسية', '🔙 رجوع', '📄 تعديل المحتوى', '🚫 إلغاء تعديل المحتوى',
-                    '✏️ تعديل الأزرار', '🚫 إلغاء تعديل الأزرار', '👑 الإشراف', '🗣️ رسالة جماعية',
-                    '📊 الإحصائيات', '📝 تعديل رسالة الترحيب', '⚙️ تعديل المشرفين', '🚫 قائمة المحظورين',
-                    '💬 التواصل مع الأدمن', '✅ النقل إلى هنا', '❌ إلغاء النقل', '➕ إضافة زر',
-                    '✂️ نقل زر', '➕ إضافة رسالة'
+                    // --- أزرار أساسية ---
+                    '🔝 القائمة الرئيسية', '🔙 رجوع', '👑 الإشراف', '💬 التواصل مع الأدمن',
+                    // --- أزرار تعديل المحتوى ---
+                    '📄 تعديل المحتوى', '🚫 إلغاء تعديل المحتوى', '➕ إضافة رسالة',
+                    // --- أزرار تعديل الأزرار ---
+                    '✏️ تعديل الأزرار', '🚫 إلغاء تعديل الأزرار', '➕ إضافة زر',
+                    // --- أزرار الإشراف ---
+                    '📊 الإحصائيات', '🗣️ رسالة جماعية', '⚙️ تعديل المشرفين', '📝 تعديل رسالة الترحيب', '🚫 قائمة المحظورين',
+                    // --- أزرار النسخ والنقل والبيانات (الجديدة) ---
+                    '✂️ نقل أزرار',
+                    '📥 نسخ أزرار',
+                    '📥 نقل البيانات',
+                    '✅ تأكيد الاختيار', // لمنع إنشاء زر بنفس النص بدون العدد
+                    '✅ النقل إلى هنا',
+                    '✅ النسخ إلى هنا',
+                    '❌ إلغاء',
+                    '❌ إلغاء النقل',
+                    '❌ إلغاء العملية',
+                    '✅ إنهاء وإضافة الكل'
                 ];
+// ... باقي الكود
+           
 
                 const buttonNames = ctx.message.text.split('\n').map(name => name.trim()).filter(name => name.length > 0);
                 if (buttonNames.length === 0) {
@@ -1341,48 +1395,29 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                          return ctx.reply('❌ خطأ: لا توجد أزرار محددة للنسخ. تم إلغاء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
                     }
                     const newParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
-                    const statusMessage = await ctx.reply(`⏳ جاري نسخ ${selectedButtons.length} أزرار مع محتوياتها...`);
+                    const statusMessage = await ctx.reply(`⏳ جاري النسخ العميق لـ ${selectedButtons.length} قسم... هذه العملية قد تستغرق بعض الوقت.`);
 
                     try {
-                        await client.query('BEGIN');
-                        // جلب الترتيب الأخير في القسم المستهدف
-                        const lastOrderResult = await client.query('SELECT COALESCE(MAX("order"), -1) AS max_order FROM public.buttons WHERE parent_id ' + (newParentId ? '= $1' : 'IS NULL'), newParentId ? [newParentId] : []);
-                        let btnOrder = lastOrderResult.rows[0].max_order;
+                        await client.query('BEGIN'); // بدء transaction لضمان تنفيذ كل شيء أو لا شيء
 
                         for (const originalButton of selectedButtons) {
                              if (originalButton.id === newParentId) {
                                 await ctx.reply(`⚠️ تم تخطي نسخ الزر "${originalButton.text}" لأنه لا يمكن نسخ قسم إلى داخل نفسه.`);
                                 continue;
                             }
-                            btnOrder++;
-                            // 1. نسخ الزر نفسه
-                            const originalButtonDetailsResult = await client.query('SELECT * FROM public.buttons WHERE id = $1', [originalButton.id]);
-                            const details = originalButtonDetailsResult.rows[0];
-
-                            const newButtonResult = await client.query(
-                                'INSERT INTO public.buttons (text, parent_id, "order", is_full_width, admin_only) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-                                [details.text, newParentId, btnOrder, details.is_full_width, details.admin_only]
-                            );
-                            const newButtonId = newButtonResult.rows[0].id;
-                            
-                            // 2. نسخ كل الرسائل داخل الزر
-                            const messagesResult = await client.query('SELECT * FROM public.messages WHERE button_id = $1 ORDER BY "order"', [originalButton.id]);
-                            for (const msg of messagesResult.rows) {
-                                await client.query(
-                                    'INSERT INTO public.messages (button_id, "order", type, content, caption, entities) VALUES ($1, $2, $3, $4, $5, $6)',
-                                    [newButtonId, msg.order, msg.type, msg.content, msg.caption, JSON.stringify(msg.entities || [])]
-                                );
-                            }
+                            // **التعديل الرئيسي**: استدعاء دالة النسخ العميق
+                            await deepCopyButton(originalButton.id, newParentId, client);
                         }
-                        await client.query('COMMIT');
-                        await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ تم نسخ ${selectedButtons.length} أزرار بنجاح.`);
+
+                        await client.query('COMMIT'); // تأكيد كل التغييرات
+                        await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ تم النسخ العميق لـ ${selectedButtons.length} قسم بنجاح.`);
                         await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
                         await refreshKeyboardView(ctx, userId, 'تم تحديث لوحة المفاتيح.');
 
                     } catch (error) {
-                        await client.query('ROLLBACK');
-                        console.error("Multi-copy button error:", error);
-                        await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '❌ حدث خطأ فادح أثناء عملية النسخ.');
+                        await client.query('ROLLBACK'); // تراجع عن كل التغييرات في حالة حدوث خطأ
+                        console.error("Deep-copy button error:", error);
+                        await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '❌ حدث خطأ فادح أثناء عملية النسخ العميق.');
                         await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
                         return refreshKeyboardView(ctx, userId, 'تم إلغاء العملية.');
                     }
