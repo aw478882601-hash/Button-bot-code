@@ -30,6 +30,27 @@ async function getClient() {
         throw error;
     }
 }
+// دالة لتحويل تنسيقات Markdown الأساسية إلى HTML
+function convertMarkdownToHtml(text) {
+    if (!text) return '';
+
+    // يجب أن تكون حريصًا على الترتيب لتجنب التداخل
+    let html = text;
+
+    // الرابط: [text](url) -> <a href="url">text</a>
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    
+    // نص عريض: *text* -> <b>text</b>
+    html = html.replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<b>$1</b>');
+
+    // نص مائل: _text_ -> <i>text</i>
+    html = html.replace(/(?<!\_)\_([^_]+)\_(?!\_)/g, '<i>$1</i>');
+
+    // نص برمجي: `text` -> <code>text</code>
+    html = html.replace(/\`([^`]+)\`/g, '<code>$1</code>');
+
+    return html;
+}
 // دالة مساعدة للحصول على ID المصدر سواء كان مستخدم، بوت، قناة، أو جروب
 function getSourceId(ctx) {
     if (ctx.message.forward_from) { // Forwarded from a user or bot
@@ -377,6 +398,7 @@ async function generateKeyboard(userId) {
 }
 
 // دالة لإرسال رسائل الزر (نسخة معدّلة)
+// دالة لإرسال رسائل الزر (نسخة نهائية بمعالج تنسيق مدمج)
 async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
     const client = await getClient();
     try {
@@ -394,35 +416,46 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
             let sentMessage;
             let inlineKeyboard = [];
             
-            const messageId = message.id;
-
             if (inEditMode) {
-                // تم تقصير بيانات الزر لتجنب الخطأ
-                const baseControls = [
-                    Markup.button.callback('🔼', `msg:up:${messageId}`),
-                    Markup.button.callback('🔽', `msg:down:${messageId}`),
-                    Markup.button.callback('🗑️', `msg:delete:${messageId}`),
-                    Markup.button.callback('➕', `msg:addnext:${messageId}`)
-                ];
+                const messageId = message.id;
+                const baseControls = [ Markup.button.callback('🔼', `msg:up:${messageId}`), Markup.button.callback('🔽', `msg:down:${messageId}`), Markup.button.callback('🗑️', `msg:delete:${messageId}`), Markup.button.callback('➕', `msg:addnext:${messageId}`) ];
                 if (message.type === 'text') {
                     baseControls.push(Markup.button.callback('✏️', `msg:edit:${messageId}`));
                     inlineKeyboard = [ baseControls ];
                 } else {
-                     inlineKeyboard = [ baseControls, [
-                        Markup.button.callback('📝 تعديل الشرح', `msg:edit_caption:${messageId}`),
-                        Markup.button.callback('🔄 استبدال الملف', `msg:replace_file:${messageId}`)
-                    ]];
+                     inlineKeyboard = [ baseControls, [ Markup.button.callback('📝 تعديل الشرح', `msg:edit_caption:${messageId}`), Markup.button.callback('🔄 استبدال الملف', `msg:replace_file:${messageId}`) ]];
                 }
             }
-            const options = { 
-                caption: message.caption || '',
-                entities: message.entities,
-                parse_mode: (message.entities && message.entities.length > 0) ? undefined : 'HTML',
+            
+            let options = {
                 reply_markup: inEditMode && inlineKeyboard.length > 0 ? { inline_keyboard: inlineKeyboard } : undefined
             };
+            let textToSend = message.content;
+
+            // ==========================================================
+            // |      =============== المنطق النهائي للتنسيق ===============      |
+            // ==========================================================
+            if (message.entities && message.entities.length > 0) {
+                // إذا كانت entities موجودة (رسالة موجهة)، فهي الأولوية القصوى
+                if (message.type === 'text') {
+                    options.entities = message.entities;
+                } else {
+                    options.caption = message.caption || '';
+                    options.caption_entities = message.entities;
+                }
+            } else {
+                // إذا لم تكن entities موجودة (نص يدوي)، قم بتحويل Markdown إلى HTML وأرسل دائمًا كـ HTML
+                options.parse_mode = 'HTML';
+                if (message.type === 'text') {
+                    textToSend = convertMarkdownToHtml(message.content);
+                } else {
+                    options.caption = convertMarkdownToHtml(message.caption);
+                }
+            }
+
             try {
                 switch (message.type) {
-                    case 'text': sentMessage = await ctx.reply(message.content, { ...options }); break;
+                    case 'text': sentMessage = await ctx.reply(textToSend, options); break;
                     case 'photo': sentMessage = await ctx.replyWithPhoto(message.content, options); break;
                     case 'video': sentMessage = await ctx.replyWithVideo(message.content, options); break;
                     case 'document': sentMessage = await ctx.replyWithDocument(message.content, options); break;
@@ -431,7 +464,7 @@ async function sendButtonMessages(ctx, buttonId, inEditMode = false) {
                 }
                 if (sentMessage) sentMessageIds.push(sentMessage.message_id);
             } catch (e) {
-                console.error(`Failed to send message ID ${messageId} (type: ${message.type}) due to error:`, e.message);
+                console.error(`Failed to send message ID ${message.id} (type: ${message.type}). Error:`, e.message);
             }
         }
         if(inEditMode && ctx.from) await trackSentMessages(String(ctx.from.id), sentMessageIds);
