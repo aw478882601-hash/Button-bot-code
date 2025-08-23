@@ -715,6 +715,7 @@ try {
                     const introMessage = await ctx.reply('🔔 **تنبيه هام من الإدارة** 🔔', { parse_mode: 'Markdown' });
                     await ctx.telegram.pinChatMessage(ctx.chat.id, introMessage.message_id).catch(e => console.error("Failed to pin message:", e.message));
                     
+await client.query('UPDATE public.users SET pinned_alert_id = $1 WHERE id = $2', [introMessage.message_id, userId]);
                     // إرسال باقي رسائل التنبيه بالترتيب
                    // ...
 // إرسال باقي رسائل التنبيه بالترتيب
