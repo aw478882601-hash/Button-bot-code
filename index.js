@@ -206,7 +206,7 @@ async function generateKeyboard(userId) {
   try {
     const userResult = await client.query('SELECT is_admin, current_path, state, state_data FROM public.users WHERE id = $1', [userId]);
     if (userResult.rows.length === 0) return [[]];
-    const { is_admin: isAdmin, current_path: currentPath, state } = userResult.rows[0];
+    const { is_admin: isAdmin, current_path: currentPath, state, state_data: stateData } = userResult.rows[0];
     let keyboardRows = [];
 
     // --- لوحات المفاتيح الخاصة بالحالات ---
@@ -215,6 +215,11 @@ async function generateKeyboard(userId) {
     }
     if (state === 'AWAITING_BULK_MESSAGES') {
         return [['✅ إنهاء الإضافة']];
+    }
+    // **تعديل**: إضافة حالة اختيار الأزرار للنقل
+    if (isAdmin && state === 'AWAITING_BUTTONS_TO_MOVE') {
+        const selectedCount = stateData.buttonsToMove?.length || 0;
+        keyboardRows.unshift([`✅ تأكيد الاختيار (${selectedCount})`, '❌ إلغاء النقل']);
     }
     if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
         keyboardRows.unshift(['✅ النقل إلى هنا', '❌ إلغاء النقل']);
@@ -248,12 +253,18 @@ async function generateKeyboard(userId) {
     let currentRow = [];
     buttonsToRender.forEach(button => {
         if (!button.admin_only || isAdmin) {
+            // **تعديل**: إضافة علامة صح بجانب الأزرار المختارة
+            let buttonText = button.text;
+            if (state === 'AWAITING_BUTTONS_TO_MOVE' && stateData.buttonsToMove?.some(b => b.id === button.id)) {
+                buttonText = `✅ ${button.text}`;
+            }
+
             if (button.is_full_width) {
                 if (currentRow.length > 0) keyboardRows.push(currentRow);
-                keyboardRows.push([button.text]);
+                keyboardRows.push([buttonText]);
                 currentRow = [];
             } else {
-                currentRow.push(button.text);
+                currentRow.push(buttonText);
                 if (currentRow.length === 2) {
                     keyboardRows.push(currentRow);
                     currentRow = [];
@@ -269,8 +280,9 @@ async function generateKeyboard(userId) {
         const adminActionRow = [];
         if (state === 'EDITING_BUTTONS') { 
             adminActionRow.push('➕ إضافة زر'); 
-            adminActionRow.push('✂️ نقل زر');
-            adminActionRow.push('📥 نقل البيانات'); // الزر الجديد
+            // **تعديل**: تغيير اسم الزر
+            adminActionRow.push('✂️ نقل أزرار');
+            adminActionRow.push('📥 نقل البيانات');
         }
         if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
             adminActionRow.push('➕ إضافة رسالة');
@@ -596,6 +608,51 @@ const mainMessageHandler = async (ctx) => {
         const { current_path: currentPath, state, is_admin: isAdmin, state_data: stateData, banned } = userResult.rows[0];
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
+      // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
+
+// ==========================================================
+// |      =============== منطق نقل الأزرار المتعدد يبدأ هنا ===============      |
+// ==========================================================
+if (isAdmin && state === 'AWAITING_BUTTONS_TO_MOVE') {
+    // تجاهل الأوامر النصية التي ليست أزرارًا
+    if (!ctx.message || !ctx.message.text) return;
+    let text = ctx.message.text;
+
+    // إذا تم الضغط على زر عادي (وليس أمرًا)
+    const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
+    const buttonNameToFind = text.startsWith('✅ ') ? text.substring(2) : text;
+    
+    let buttonResult;
+    if (currentParentId === null) {
+        buttonResult = await client.query('SELECT id, text FROM public.buttons WHERE parent_id IS NULL AND text = $1', [buttonNameToFind]);
+    } else {
+        buttonResult = await client.query('SELECT id, text FROM public.buttons WHERE parent_id = $1 AND text = $2', [currentParentId, buttonNameToFind]);
+    }
+
+    if (buttonResult.rows.length > 0) {
+        const clickedButton = buttonResult.rows[0];
+        let buttonsToMove = stateData.buttonsToMove || [];
+        const buttonIndex = buttonsToMove.findIndex(b => b.id === clickedButton.id);
+
+        let feedbackMessage;
+        if (buttonIndex > -1) { // إذا كان الزر محددًا بالفعل، قم بإلغاء تحديده
+            buttonsToMove.splice(buttonIndex, 1);
+            feedbackMessage = `❌ تم إلغاء تحديد الزر: "${clickedButton.text}"`;
+        } else { // إذا لم يكن محددًا، قم بتحديده
+            buttonsToMove.push(clickedButton);
+            feedbackMessage = `✅ تم تحديد الزر: "${clickedButton.text}"`;
+        }
+
+        await updateUserState(userId, { stateData: { buttonsToMove } });
+        await refreshKeyboardView(ctx, userId, feedbackMessage);
+        return;
+    }
+}
+// ==========================================================
+// |      ================ منطق نقل الأزرار المتعدد ينتهي هنا ===============      |
+// ==========================================================
+
+// ... يستمر الكود القديم الخاص بـ DYNAMIC_TRANSFER وباقي الحالات
 // ==========================================================
 // |      =============== الكود المحدث والنهائي يبدأ هنا ===============      |
 // ==========================================================
@@ -1193,10 +1250,25 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     );
                 }
                 break;
-            case '✂️ نقل زر':
+            case '✂️ نقل أزرار':
                 if (isAdmin && state === 'EDITING_BUTTONS') {
-                    await updateUserState(userId, { state: 'AWAITING_SOURCE_BUTTON_TO_MOVE' });
-                    return ctx.reply('✂️ الخطوة 1: اختر الزر الذي تريد نقله (المصدر).');
+                    await updateUserState(userId, {
+                        state: 'AWAITING_BUTTONS_TO_MOVE',
+                        stateData: { buttonsToMove: [] } // ابدأ بمصفوفة فارغة
+                    });
+                    return ctx.reply('✂️ **وضع تحديد الأزرار**\n\nاضغط على الأزرار التي تريد نقلها. ستظهر علامة ✅ بجانب كل زر تحدده. اضغط عليه مرة أخرى لإلغاء التحديد.\n\nعند الانتهاء، اضغط "✅ تأكيد الاختيار".', Markup.keyboard(await generateKeyboard(userId)).resize());
+                }
+                break;
+            
+            // **إضافة**: حالة جديدة لتأكيد الاختيار
+            case (text.match(/^✅ تأكيد الاختيار \(\d+\)$/) || {}).input:
+                if (isAdmin && state === 'AWAITING_BUTTONS_TO_MOVE') {
+                    const selectedCount = stateData.buttonsToMove?.length || 0;
+                    if (selectedCount === 0) {
+                        return ctx.reply('⚠️ لم تحدد أي أزرار لنقلها.');
+                    }
+                    await updateUserState(userId, { state: 'AWAITING_DESTINATION_PATH' });
+                    return ctx.reply(`🚙 تم تحديد ${selectedCount} زر.\n\nالآن، اذهب إلى القسم الذي تريد النقل إليه ثم اضغط "✅ النقل إلى هنا".`, Markup.keyboard(await generateKeyboard(userId)).resize());
                 }
                 break;
             case '📥 نقل البيانات':
@@ -1219,33 +1291,33 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                 break;
             case '✅ النقل إلى هنا':
                 if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
-                    const { sourceButtonId, sourceButtonText } = stateData;
+                    const { buttonsToMove } = stateData;
+                    if (!buttonsToMove || buttonsToMove.length === 0) {
+                        return ctx.reply('❌ خطأ: لا توجد أزرار محددة للنقل. تم إلغاء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    }
+                    
                     const newParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
+                    
                     try {
-                        const sourceButtonResult = await client.query('SELECT parent_id FROM public.buttons WHERE id = $1', [sourceButtonId]);
-                        if (sourceButtonResult.rows.length === 0) {
-                           await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
-                           return ctx.reply(`❌ خطأ: الزر المصدر غير موجود. تم إلغاء العملية.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                        await client.query('BEGIN'); // بدء transaction
+                        for (const button of buttonsToMove) {
+                            await client.query('UPDATE public.buttons SET parent_id = $1 WHERE id = $2', [newParentId, button.id]);
                         }
-                        const oldParentId = sourceButtonResult.rows[0]?.parent_id;
+                        await client.query('COMMIT'); // تأكيد التغييرات
                         
-                        if (newParentId === oldParentId) {
-                             await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
-                             return ctx.reply(`❌ خطأ: لا يمكن نقل زر إلى نفس مكانه الحالي.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-                        }
-                        await ctx.reply(`⏳ جاري نقل الزر [${sourceButtonText}] إلى القسم الحالي...`);
-                        await client.query('UPDATE public.buttons SET parent_id = $1 WHERE id = $2', [newParentId, sourceButtonId]);
                         await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
-                        return ctx.reply(`✅ تم نقل الزر بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                        await ctx.reply(`✅ تم نقل ${buttonsToMove.length} أزرار بنجاح.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+
                     } catch (error) {
-                        console.error("Move button error in handler:", error.message, { sourceButtonId, newParentId });
+                        await client.query('ROLLBACK'); // تراجع في حالة حدوث خطأ
+                        console.error("Multi-move button error:", error);
                         await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
-                        return ctx.reply(`❌ حدث خطأ أثناء نقل الزر. تم إبلاغ المطور.`, Markup.keyboard(await generateKeyboard(userId)).resize());
+                        return ctx.reply(`❌ حدث خطأ أثناء نقل الأزرار. تم إبلاغ المطور.`, Markup.keyboard(await generateKeyboard(userId)).resize());
                     }
                 }
                 break;
             case '❌ إلغاء النقل':
-                if (isAdmin && state === 'AWAITING_DESTINATION_PATH') {
+                if (isAdmin && (state === 'AWAITING_DESTINATION_PATH' || state === 'AWAITING_BUTTONS_TO_MOVE')) {
                     await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
                     return ctx.reply('👍 تم إلغاء عملية النقل.', Markup.keyboard(await generateKeyboard(userId)).resize());
                 }
