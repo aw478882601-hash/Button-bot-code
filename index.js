@@ -703,6 +703,9 @@ const mainMessageHandler = async (ctx) => {
         await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
       // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
       // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
+      // =================================================================
+// |      =============== منطق عرض رسالة التنبيه (مُحسَّن) يبدأ هنا ===============      |
+// =================================================================
 try {
     const settingsResult = await client.query('SELECT alert_message, alert_message_set_at, alert_duration_hours FROM public.settings WHERE id = 1');
     const alert = settingsResult.rows[0];
@@ -712,21 +715,34 @@ try {
         const alertSetAt = new Date(alert.alert_message_set_at);
         const expiresAt = new Date(alertSetAt.getTime() + alert.alert_duration_hours * 60 * 60 * 1000);
 
-        // تحقق: هل التنبيه لا يزال ساريًا؟ وهل المستخدم لم يره من قبل؟
         if (new Date() < expiresAt && (!userLastSeen || new Date(userLastSeen) < alertSetAt)) {
+            
+            // **إضافة**: إرسال الرسالة النصية التمهيدية دائمًا
+            await ctx.reply('🔔 **تنبيه هام من الإدارة** 🔔', { parse_mode: 'Markdown' });
+
             const messageObject = alert.alert_message;
             let sentAlert;
-            // إرسال الرسالة للمستخدم
-            if (messageObject.type === 'text') {
-                sentAlert = await ctx.reply(messageObject.content, { entities: messageObject.entities, parse_mode: 'HTML' });
-            } else { // للملفات
-                sentAlert = await ctx.replyWithPhoto(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities });
-                // يمكنك إضافة باقي أنواع الملفات هنا بنفس الطريقة
+            
+            // إرسال محتوى التنبيه
+            switch(messageObject.type) {
+                case 'text':
+                    sentAlert = await ctx.reply(messageObject.content, { entities: messageObject.entities, parse_mode: 'HTML' });
+                    break;
+                case 'photo':
+                    sentAlert = await ctx.replyWithPhoto(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities, parse_mode: 'HTML' });
+                    break;
+                case 'document':
+                    sentAlert = await ctx.replyWithDocument(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities, parse_mode: 'HTML' });
+                    break;
+                case 'video':
+                    sentAlert = await ctx.replyWithVideo(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities, parse_mode: 'HTML' });
+                    break;
             }
 
             if (sentAlert) {
-                // تثبيت الرسالة
-                await ctx.telegram.pinChatMessage(ctx.chat.id, sentAlert.message_id, { disable_notification: true }).catch(e => console.error("Failed to pin message:", e.message));
+                // **تعديل**: تثبيت الرسالة مع إشعار (لتحقيق تأثير الرسالة المنبثقة)
+                await ctx.telegram.pinChatMessage(ctx.chat.id, sentAlert.message_id).catch(e => console.error("Failed to pin message:", e.message));
+                
                 // تحديث بيانات المستخدم بأنه شاهد التنبيه
                 await client.query('UPDATE public.users SET last_alert_seen_at = NOW() WHERE id = $1', [userId]);
             }
@@ -735,6 +751,9 @@ try {
 } catch (e) {
     console.error("Error handling alert message:", e);
 }
+// =================================================================
+// |      ================ منطق عرض رسالة التنبيه ينتهي هنا ===============      |
+// =================================================================
 // ==========================================================
 // |      =============== منطق اختيار الأزرار (للنقل والنسخ) يبدأ هنا ===============      |
 // ==========================================================
@@ -900,13 +919,17 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
 // |      ================ الكود المحدث والنهائي ينتهي هنا ===============      |
 // ==========================================================
       // ... بعد انتهاء منطق DYNAMIC_TRANSFER وقبل if (state === 'AWAITING_BULK_MESSAGES')
-
-        if (isAdmin && state === 'AWAITING_ALERT_MESSAGE') {
+if (isAdmin && state === 'AWAITING_ALERT_MESSAGE') {
             let messageObject;
+            // استيعاب جميع أنواع الرسائل المدعومة
             if (ctx.message.text) {
                 messageObject = { type: "text", content: ctx.message.text, caption: '', entities: ctx.message.entities || [] };
             } else if (ctx.message.photo) {
                 messageObject = { type: "photo", content: ctx.message.photo.pop().file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] };
+            } else if (ctx.message.document) {
+                messageObject = { type: "document", content: ctx.message.document.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] };
+            } else if (ctx.message.video) {
+                messageObject = { type: "video", content: ctx.message.video.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] };
             } else {
                 return ctx.reply("⚠️ نوع الرسالة غير مدعوم حاليًا كرسالة تنبيه.");
             }
@@ -914,24 +937,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             await updateUserState(userId, { state: 'AWAITING_ALERT_DURATION', stateData: { alertMessage: messageObject } });
             return ctx.reply('👍 تم استلام الرسالة. الآن أدخل مدة صلاحية التنبيه بالساعات (مثال: 6).');
         }
-
-        if (isAdmin && state === 'AWAITING_ALERT_DURATION') {
-            const duration = parseInt(ctx.message.text);
-            if (isNaN(duration) || duration <= 0) {
-                return ctx.reply('⚠️ يرجى إدخال رقم صحيح أكبر من صفر.');
-            }
-            
-            const { alertMessage } = stateData;
-            await client.query(
-                `INSERT INTO public.settings (id, alert_message, alert_message_set_at, alert_duration_hours) 
-                 VALUES (1, $1, NOW(), $2) 
-                 ON CONFLICT (id) DO UPDATE SET alert_message = EXCLUDED.alert_message, alert_message_set_at = EXCLUDED.alert_message_set_at, alert_duration_hours = EXCLUDED.alert_duration_hours`,
-                [JSON.stringify(alertMessage), duration]
-            );
-            
-            await updateUserState(userId, { state: 'NORMAL', stateData: {} });
-            return ctx.reply(`✅ تم تفعيل رسالة التنبيه بنجاح لمدة ${duration} ساعة.`, Markup.keyboard(await generateKeyboard(userId)).resize());
-        }
+       
         if (state === 'AWAITING_BULK_MESSAGES') {
             const { buttonId, collectedMessages = [] } = stateData;
 
