@@ -40,6 +40,22 @@ function getSourceId(ctx) {
     }
     return null;
 }
+// دالة مساعدة لحذف زر وكل محتوياته وأزراره الفرعية بشكل متكرر
+async function deepDeleteButton(buttonId, client) {
+    // 1. البحث عن كل الأزرار الفرعية للزر الحالي
+    const subButtonsResult = await client.query('SELECT id FROM public.buttons WHERE parent_id = $1', [buttonId]);
+
+    // 2. الخطوة التكرارية: استدعاء نفس الدالة لكل زر فرعي لحذف فروعه أولاً
+    for (const subButton of subButtonsResult.rows) {
+        await deepDeleteButton(subButton.id, client);
+    }
+
+    // 3. بعد حذف كل الفروع، قم بحذف الرسائل الخاصة بالزر الحالي
+    await client.query('DELETE FROM public.messages WHERE button_id = $1', [buttonId]);
+
+    // 4. وأخيراً، قم بحذف الزر الحالي نفسه
+    await client.query('DELETE FROM public.buttons WHERE id = $1', [buttonId]);
+}
 // دالة مساعدة لنسخ زر وكل محتوياته وأزراره الفرعية بشكل متكرر
 async function deepCopyButton(originalButtonId, newParentId, client) {
     // 1. جلب بيانات الزر الأصلي
@@ -1626,10 +1642,23 @@ bot.on('callback_query', async (ctx) => {
             }
 
             if (subAction === 'yes') {
-                await client.query('DELETE FROM public.buttons WHERE id = $1', [buttonId]);
-                await ctx.editMessageText('🗑️ تم الحذف بنجاح.');
-                await refreshKeyboardView(ctx, userId, 'تم تحديث لوحة المفاتيح.');
-                return ctx.answerCbQuery();
+                try {
+                    // **التعديل الرئيسي**: استدعاء دالة الحذف العميق
+                    await ctx.editMessageText('⏳ جاري الحذف العميق للقسم...');
+                    await client.query('BEGIN'); // بدء transaction لضمان الأمان
+                    await deepDeleteButton(buttonId, client);
+                    await client.query('COMMIT'); // تأكيد الحذف
+
+                    await ctx.editMessageText('🗑️ تم الحذف العميق للقسم بنجاح.');
+                    await refreshKeyboardView(ctx, userId, 'تم تحديث لوحة المفاتيح.');
+                    return ctx.answerCbQuery();
+
+                } catch (error) {
+                    await client.query('ROLLBACK'); // تراجع عن الحذف في حالة حدوث خطأ
+                    console.error("Deep-delete button error:", error);
+                    await ctx.editMessageText('❌ حدث خطأ فادح أثناء عملية الحذف.');
+                    return ctx.answerCbQuery('فشل الحذف', { show_alert: true });
+                }
             }
         }
 
