@@ -716,14 +716,29 @@ try {
                     await ctx.telegram.pinChatMessage(ctx.chat.id, introMessage.message_id).catch(e => console.error("Failed to pin message:", e.message));
                     
                     // إرسال باقي رسائل التنبيه بالترتيب
-                    for (const messageObject of alert.alert_message) {
-                        switch(messageObject.type) {
-                            case 'text': await ctx.reply(messageObject.content, { entities: messageObject.entities, parse_mode: 'HTML' }); break;
-                            case 'photo': await ctx.replyWithPhoto(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities, parse_mode: 'HTML' }); break;
-                            case 'document': await ctx.replyWithDocument(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities, parse_mode: 'HTML' }); break;
-                            case 'video': await ctx.replyWithVideo(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities, parse_mode: 'HTML' }); break;
-                        }
-                    }
+                   // ...
+// إرسال باقي رسائل التنبيه بالترتيب
+for (const messageObject of alert.alert_message) {
+    switch(messageObject.type) {
+        case 'text':
+            // تم حذف parse_mode من هنا
+            await ctx.reply(messageObject.content, { entities: messageObject.entities });
+            break;
+        case 'photo':
+            // تم حذف parse_mode من هنا
+            await ctx.replyWithPhoto(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities });
+            break;
+        case 'document':
+            // تم حذف parse_mode من هنا
+            await ctx.replyWithDocument(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities });
+            break;
+        case 'video':
+            // تم حذف parse_mode من هنا
+            await ctx.replyWithVideo(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities });
+            break;
+    }
+}
+//...
                     await client.query('UPDATE public.users SET last_alert_seen_at = NOW() WHERE id = $1', [userId]);
                 }
             }
