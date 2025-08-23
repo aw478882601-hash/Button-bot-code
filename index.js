@@ -1370,7 +1370,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                             for (const msg of messagesResult.rows) {
                                 await client.query(
                                     'INSERT INTO public.messages (button_id, "order", type, content, caption, entities) VALUES ($1, $2, $3, $4, $5, $6)',
-                                    [newButtonId, msg.order, msg.type, msg.content, msg.caption, msg.entities]
+                                    [newButtonId, msg.order, msg.type, msg.content, msg.caption, JSON.stringify(msg.entities || [])]
                                 );
                             }
                         }
