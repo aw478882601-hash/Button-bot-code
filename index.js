@@ -323,6 +323,13 @@ async function generateKeyboard(userId) {
     if (state === 'AWAITING_ALERT_MESSAGES') {
         return [['✅ إنهاء إضافة رسائل التنبيه']];
     }
+    if (isAdmin && state === 'AWAITING_DEFAULT_BUTTON_NAMES') {
+        return [['✅ تأكيد الأسماء والانتقال للاختيار'], ['❌ إلغاء']];
+    }
+    if (isAdmin && state === 'SELECTING_TARGETS_FOR_DEFAULT') {
+        const selectedCount = stateData.selectedTargets?.length || 0;
+        keyboardRows.unshift([`✅ إضافة للـ (${selectedCount}) قسم المحدد`, '❌ إلغاء']);
+    }
     if (state === 'DYNAMIC_TRANSFER') {
         return [['✅ إنهاء وإضافة الكل', '❌ إلغاء العملية']];
     }
@@ -370,6 +377,9 @@ async function generateKeyboard(userId) {
             if (state === 'SELECTING_BUTTONS' && stateData.selectedButtons?.some(b => b.id === button.id)) {
                 buttonText = `✅ ${button.text}`;
             }
+          if (state === 'SELECTING_TARGETS_FOR_DEFAULT' && stateData.selectedTargets?.some(b => b.id === button.id)) {
+                buttonText = `✅ ${button.text}`;
+            }
 
             if (button.is_full_width) {
                 if (currentRow.length > 0) keyboardRows.push(currentRow);
@@ -389,10 +399,11 @@ async function generateKeyboard(userId) {
 
     // --- إضافة أزرار الإدارة ---
     if (isAdmin) {
-        if (state === 'EDITING_BUTTONS') { 
-            keyboardRows.push(['📥 نقل البيانات', '➕ إضافة زر']);
-            keyboardRows.push(['✂️ نقل أزرار', '📥 نسخ أزرار']);
-        }
+        if (isAdmin && state === 'EDITING_BUTTONS') { 
+    keyboardRows.push(['➕ إضافة زر']);
+    keyboardRows.push(['📥 نقل البيانات', '➕ أزرار افتراضية']);
+    keyboardRows.push(['✂️ نقل أزرار', '📥 نسخ أزرار']);
+}
         const otherAdminActions = [];
         if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
             otherAdminActions.push('➕ إضافة رسالة');
@@ -787,6 +798,41 @@ for (const messageObject of alert.alert_message) {
 // ==========================================================
 // |      =============== منطق اختيار الأزرار (للنقل والنسخ) يبدأ هنا ===============      |
 // ==========================================================
+      // ==========================================================
+// |      =============== منطق الأزرار الافتراضية (استقبال الأسماء) يبدأ هنا ===============      |
+// ==========================================================
+if (isAdmin && state === 'AWAITING_DEFAULT_BUTTON_NAMES') {
+    if (!ctx.message || !ctx.message.text) return;
+    const text = ctx.message.text;
+
+    if (text === '❌ إلغاء') {
+        await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
+        return ctx.reply('👍 تم إلغاء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
+    }
+    
+    if (text === '✅ تأكيد الأسماء والانتقال للاختيار') {
+        const defaultButtonNames = stateData.defaultButtonNames;
+        if (!defaultButtonNames || defaultButtonNames.length === 0) {
+            return ctx.reply('⚠️ لم تقم بإدخال أي أسماء. أرسل الأسماء أولاً.');
+        }
+
+        await updateUserState(userId, {
+            state: 'SELECTING_TARGETS_FOR_DEFAULT',
+            stateData: { defaultButtonNames, selectedTargets: [] }
+        });
+        return ctx.reply(
+            `👍 تم حفظ ${defaultButtonNames.length} اسم.\n\n` +
+            '**الخطوة التالية:**\n' +
+            'تنقل الآن في البوت واختر الأقسام الرئيسية التي تريد إضافة هذه الأزرار بداخلها. عند الانتهاء، اضغط على زر التأكيد في الأعلى.',
+            { parse_mode: 'Markdown', ...Markup.keyboard(await generateKeyboard(userId)).resize() }
+        );
+    }
+
+    // إذا لم يكن أمرًا، اعتبره قائمة الأسماء
+    const buttonNames = text.split('\n').map(name => name.trim()).filter(name => name);
+    await updateUserState(userId, { stateData: { ...stateData, defaultButtonNames: buttonNames } });
+    return ctx.reply(`✅ تم استلام ${buttonNames.length} اسم. اضغط على زر التأكيد في الأسفل للمتابعة.`);
+}
 if (isAdmin && state === 'SELECTING_BUTTONS') {
     if (!ctx.message || !ctx.message.text) return;
     let text = ctx.message.text;
@@ -823,7 +869,95 @@ if (isAdmin && state === 'SELECTING_BUTTONS') {
 // ==========================================================
 // |      ================ منطق اختيار الأزرار ينتهي هنا ===============      |
 // ==========================================================
+// ==========================================================
+// |      =============== منطق الأزرار الافتراضية (اختيار الأهداف) يبدأ هنا ===============      |
+// ==========================================================
+if (isAdmin && state === 'SELECTING_TARGETS_FOR_DEFAULT') {
+    if (!ctx.message || !ctx.message.text) return;
+    let text = ctx.message.text;
+    
+    // --- 1. التعامل مع أوامر الإلغاء والتأكيد ---
+    if (text === '❌ إلغاء') {
+        await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
+        return ctx.reply('👍 تم إلغاء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
+    }
+    
+    if (text.startsWith('✅ إضافة للـ')) {
+        const { defaultButtonNames, selectedTargets } = stateData;
 
+        if (!selectedTargets || selectedTargets.length === 0) {
+            return ctx.reply('⚠️ لم تختر أي قسم لإضافة الأزرار إليه.');
+        }
+
+        const statusMessage = await ctx.reply(`⏳ جارٍ إضافة ${defaultButtonNames.length} زر افتراضي إلى ${selectedTargets.length} قسم...`);
+        let totalAdded = 0;
+        let errors = [];
+
+        try {
+            await client.query('BEGIN'); // بدء transaction
+            for (const target of selectedTargets) {
+                const parentId = target.id;
+                const lastOrderResult = await client.query('SELECT COALESCE(MAX("order"), -1) AS max_order FROM public.buttons WHERE parent_id = $1', [parentId]);
+                let lastOrder = lastOrderResult.rows[0].max_order;
+
+                for (const newButtonName of defaultButtonNames) {
+                    // تحقق من عدم وجود زر بنفس الاسم في نفس القسم
+                    const existingButton = await client.query('SELECT id FROM public.buttons WHERE parent_id = $1 AND text = $2', [parentId, newButtonName]);
+                    if (existingButton.rows.length === 0) {
+                        lastOrder++;
+                        await client.query('INSERT INTO public.buttons (text, parent_id, "order", is_full_width) VALUES ($1, $2, $3, $4)', [newButtonName, parentId, lastOrder, true]);
+                        totalAdded++;
+                    }
+                }
+            }
+            await client.query('COMMIT'); // تأكيد التغييرات
+        } catch (e) {
+            await client.query('ROLLBACK'); // تراجع في حالة حدوث خطأ
+            console.error("Error adding default buttons:", e);
+            errors.push("حدث خطأ في قاعدة البيانات.");
+        }
+
+        let summary = `🎉 **اكتملت العملية** 🎉\n\nتمت إضافة ${totalAdded} زر بنجاح.\n`;
+        if (errors.length > 0) {
+            summary += `\n⚠️ حدثت أخطاء:\n- ${errors.join('\n- ')}`;
+        }
+
+        await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, summary, { parse_mode: 'Markdown' });
+        await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
+        await refreshKeyboardView(ctx, userId, 'تم تحديث لوحة المفاتيح.');
+        return;
+    }
+
+    // --- 2. التعامل مع اختيار الأقسام ---
+    const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
+    const buttonNameToFind = text.startsWith('✅ ') ? text.substring(2) : text;
+    
+    let buttonResult;
+    if (currentParentId === null) {
+        buttonResult = await client.query('SELECT id, text FROM public.buttons WHERE parent_id IS NULL AND text = $1', [buttonNameToFind]);
+    } else {
+        buttonResult = await client.query('SELECT id, text FROM public.buttons WHERE parent_id = $1 AND text = $2', [currentParentId, buttonNameToFind]);
+    }
+
+    if (buttonResult.rows.length > 0) {
+        const clickedButton = buttonResult.rows[0];
+        let selectedTargets = stateData.selectedTargets || [];
+        const buttonIndex = selectedTargets.findIndex(b => b.id === clickedButton.id);
+
+        let feedbackMessage;
+        if (buttonIndex > -1) {
+            selectedTargets.splice(buttonIndex, 1);
+            feedbackMessage = `❌ تم إلغاء تحديد القسم: "${clickedButton.text}"`;
+        } else {
+            selectedTargets.push(clickedButton);
+            feedbackMessage = `✅ تم تحديد القسم: "${clickedButton.text}"`;
+        }
+
+        await updateUserState(userId, { stateData: { ...stateData, selectedTargets } });
+        await refreshKeyboardView(ctx, userId, feedbackMessage);
+        return;
+    }
+}
 // ... يستمر الكود القديم الخاص بـ DYNAMIC_TRANSFER وباقي الحالات
 // ==========================================================
 // |      =============== الكود المحدث والنهائي يبدأ هنا ===============      |
@@ -1555,6 +1689,22 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     return ctx.reply(`🚙 تم تحديد ${selectedCount} زر.\n\nالآن، اذهب إلى القسم الذي تريد ${actionName} إليه ثم اضغط على الزر المناسب.`, Markup.keyboard(await generateKeyboard(userId)).resize());
                 }
                 break;
+            // ... باقي الحالات
+            case '➕ أزرار افتراضية':
+                if (isAdmin && state === 'EDITING_BUTTONS') {
+                    await updateUserState(userId, {
+                        state: 'AWAITING_DEFAULT_BUTTON_NAMES',
+                        stateData: {}
+                    });
+                    return ctx.reply(
+                        '📝 **ميزة الأزرار الافتراضية**\n\n' +
+                        'أرسل الآن أسماء الأزرار التي تريد إضافتها بشكل متكرر. اجعل كل اسم في سطر منفصل.\n\n' +
+                        'عند الانتهاء، اضغط على "✅ تأكيد الأسماء والانتقال للاختيار".',
+                        { parse_mode: 'Markdown' }
+                    );
+                }
+                break;
+// ...
             case '📥 نقل البيانات':
                 if (isAdmin && state === 'EDITING_BUTTONS') {
                     await updateUserState(userId, { 
