@@ -1930,14 +1930,15 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
 
         await updateButtonStats(buttonId, userId);
 
-        const canEnter = hasSubButtons || (isAdmin && ['EDITING_CONTENT', 'EDITING_BUTTONS', 'AWAITING_DESTINATION_PATH'].includes(state));
+        const canEnter = hasSubButtons || (isAdmin && ['EDITING_CONTENT', 'EDITING_BUTTONS', 'AWAITING_DESTINATION'].includes(state));
         
         if (canEnter) {
             await updateUserState(userId, { currentPath: `${currentPath}/${buttonId}` });
             await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
-            let replyText = `أنت الآن في قسم: ${text}`;
-            if (state === 'AWAITING_DESTINATION_PATH' && !hasSubButtons && !hasMessages) {
-                replyText = `🧭 تم الدخول إلى القسم الفارغ [${text}].\nاضغط "✅ النقل إلى هنا" لاختياره كوجهة.`;
+           let replyText = `أنت الآن في قسم: ${text}`;
+            if (state === 'AWAITING_DESTINATION' && !hasSubButtons && !hasMessages) {
+                const actionText = stateData.selectionAction === 'copy' ? 'النسخ' : 'النقل';
+                replyText = `🧭 تم الدخول إلى القسم الفارغ [${text}].\nاضغط "✅ ${actionText} إلى هنا" لاختياره كوجهة.`;
             } else if ((state === 'EDITING_CONTENT' || state === 'EDITING_BUTTONS') && !hasMessages && !hasSubButtons) {
                 replyText = 'هذا الزر فارغ. يمكنك الآن إضافة رسائل أو أزرار فرعية.';
             }
