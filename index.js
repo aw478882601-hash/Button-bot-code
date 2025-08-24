@@ -831,7 +831,7 @@ if (isAdmin && state === 'AWAITING_DEFAULT_BUTTON_NAMES') {
     // إذا لم يكن أمرًا، اعتبره قائمة الأسماء
     const buttonNames = text.split('\n').map(name => name.trim()).filter(name => name);
     await updateUserState(userId, { stateData: { ...stateData, defaultButtonNames: buttonNames } });
-    return ctx.reply(`✅ تم استلام ${buttonNames.length} اسم. اضغط على زر التأكيد في الأسفل للمتابعة.`);
+    return ctx.reply(`✅ تم استلام ${buttonNames.length} اسم. اضغط على زر التأكيد في الأسفل للمتابعة.`, Markup.keyboard(await generateKeyboard(userId)).resize());
 }
 if (isAdmin && state === 'SELECTING_BUTTONS') {
     if (!ctx.message || !ctx.message.text) return;
