@@ -1438,9 +1438,12 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     }
                     
                     // عرض أزرار التحكم
+                    // عرض أزرار التحكم
+                    // عرض أزرار التحكم
                     await ctx.reply('اختر الإجراء المطلوب:', Markup.inlineKeyboard([
                         [Markup.button.callback('➕ تعيين تنبيه جديد', 'alert:set')],
-                        [Markup.button.callback('🗑️ حذف التنبيه الحالي', 'alert:delete')]
+                        [Markup.button.callback('🗑️ حذف التنبيه الحالي', 'alert:delete')],
+                        [Markup.button.callback('📌 إلغاء تثبيت التنبيه للجميع', 'alert:unpin_all')] // <-- الزر الجديد
                     ]));
                 }
                 break;
@@ -1792,6 +1795,58 @@ if (action === 'alert') {
                 await ctx.answerCbQuery('تم حذف التنبيه بنجاح');
                 return ctx.editMessageText('✅ تم حذف رسالة التنبيه الحالية بنجاح.');
             }
+            // ==========================================================
+            // |      ===============  المنطق الجديد يبدأ هنا ===============      |
+            // ==========================================================
+            if (subAction === 'unpin_all') {
+                await ctx.answerCbQuery();
+                const statusMessage = await ctx.reply('⏳ جارٍ البدء في عملية إلغاء تثبيت التنبيه لجميع المستخدمين...');
+    
+                try {
+                    const usersToUnpinResult = await client.query('SELECT id, chat_id, pinned_alert_id FROM public.users WHERE pinned_alert_id IS NOT NULL');
+                    const users = usersToUnpinResult.rows;
+    
+                    if (users.length === 0) {
+                        return ctx.editMessageText('✅ لا يوجد مستخدمون لديهم تنبيهات مثبتة حاليًا.');
+                    }
+    
+                    let successCount = 0;
+                    let failureCount = 0;
+                    let processedCount = 0;
+    
+                    for (const user of users) {
+                        try {
+                            // محاولة إلغاء تثبيت الرسالة المحددة في محادثة المستخدم
+                            await bot.telegram.unpinChatMessage(user.chat_id, user.pinned_alert_id);
+                            successCount++;
+                        } catch (e) {
+                            // قد يفشل الأمر إذا قام المستخدم بحظر البوت
+                            console.error(`Failed to unpin for user ${user.id}:`, e.message);
+                            failureCount++;
+                        }
+                        
+                        processedCount++;
+                        // تحديث الرسالة كل 100 مستخدم لإظهار التقدم
+                        if (processedCount % 100 === 0) {
+                             await bot.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `⏳ جاري المعالجة... (${processedCount}/${users.length})`);
+                        }
+                    }
+    
+                    // بعد الانتهاء من الجميع، قم بتنظيف حقل الرسالة المثبتة في قاعدة البيانات
+                    await client.query('UPDATE public.users SET pinned_alert_id = NULL WHERE pinned_alert_id IS NOT NULL');
+    
+                    const finalMessage = `✅ اكتملت العملية.\n\n- تم إلغاء التثبيت بنجاح لـ: ${successCount} مستخدم.\n- فشل الإلغاء لـ: ${failureCount} مستخدم.`;
+                    await ctx.editMessageText(finalMessage);
+    
+                } catch(error) {
+                    console.error("Error during unpin_all process:", error);
+                    await ctx.editMessageText('❌ حدث خطأ فادح أثناء عملية إلغاء التثبيت.');
+                }
+                return;
+            }
+            // ==========================================================
+            // |      ================ المنطق الجديد ينتهي هنا ===============      |
+            // ==========================================================
         }
         if (action === 'user' && parts[1] === 'reply') {
             const targetAdminId = parts[2]; // الحصول على ID الأدمن من الزر
