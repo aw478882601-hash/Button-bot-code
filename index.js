@@ -30,6 +30,46 @@ async function getClient() {
         throw error;
     }
 }
+// دالة جديدة مخصصة لعملية إلغاء التثبيت
+async function unpinAllAlerts(ctx, client) {
+    const statusMessage = await ctx.reply('⏳ جارٍ البدء في عملية إلغاء تثبيت التنبيه لجميع المستخدمين...');
+    try {
+        const usersToUnpinResult = await client.query('SELECT id, chat_id, pinned_alert_id FROM public.users WHERE pinned_alert_id IS NOT NULL');
+        const users = usersToUnpinResult.rows;
+
+        if (users.length === 0) {
+            await bot.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '✅ لا يوجد مستخدمون لديهم تنبيهات مثبتة حاليًا.');
+            return;
+        }
+
+        let successCount = 0;
+        let failureCount = 0;
+        let processedCount = 0;
+
+        for (const user of users) {
+            try {
+                await bot.telegram.unpinChatMessage(user.chat_id, user.pinned_alert_id);
+                successCount++;
+            } catch (e) {
+                console.error(`Failed to unpin for user ${user.id}:`, e.message);
+                failureCount++;
+            }
+            processedCount++;
+            if (processedCount > 0 && processedCount % 100 === 0) {
+                 await bot.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `⏳ جاري المعالجة... (${processedCount}/${users.length})`);
+            }
+        }
+
+        await client.query('UPDATE public.users SET pinned_alert_id = NULL WHERE pinned_alert_id IS NOT NULL');
+
+        const finalMessage = `✅ اكتملت عملية إلغاء التثبيت.\n\n- النجاح: ${successCount} مستخدم.\n- الفشل: ${failureCount} مستخدم.`;
+        await bot.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, finalMessage);
+
+    } catch(error) {
+        console.error("Error during unpinAllAlerts process:", error);
+        await bot.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '❌ حدث خطأ فادح أثناء عملية إلغاء التثبيت.');
+    }
+}
 // دالة لتحويل تنسيقات Markdown الأساسية إلى HTML
 function convertMarkdownToHtml(text) {
     if (!text) return '';
@@ -741,6 +781,7 @@ for (const messageObject of alert.alert_message) {
 }
 //...
                     await client.query('UPDATE public.users SET last_alert_seen_at = NOW() WHERE id = $1', [userId]);
+                  return; 
                 }
             }
         } catch (e) { console.error("Error handling alert message:", e); }
@@ -1785,65 +1826,30 @@ bot.on('callback_query', async (ctx) => {
 if (action === 'alert') {
             const subAction = parts[1];
             if (subAction === 'set') {
-                // **تعديل**: تغيير الحالة إلى AWAITING_ALERT_MESSAGES
                 await updateUserState(userId, { state: 'AWAITING_ALERT_MESSAGES', stateData: { collectedMessages: [] } });
                 await ctx.answerCbQuery();
-                return ctx.reply('أرسل الآن أو وجّه الرسائل التي تريد استخدامها كتنبيه. اضغط "إنهاء" عند الانتهاء.', Markup.keyboard(await generateKeyboard(userId)).resize());
-            }
-            if (subAction === 'delete') {
-                await client.query('UPDATE public.settings SET alert_message = NULL, alert_message_set_at = NULL, alert_duration_hours = NULL WHERE id = 1');
-                await ctx.answerCbQuery('تم حذف التنبيه بنجاح');
-                return ctx.editMessageText('✅ تم حذف رسالة التنبيه الحالية بنجاح.');
-            }
-            // ==========================================================
-            // |      ===============  المنطق الجديد يبدأ هنا ===============      |
-            // ==========================================================
-            if (subAction === 'unpin_all') {
-                await ctx.answerCbQuery();
-                const statusMessage = await ctx.reply('⏳ جارٍ البدء في عملية إلغاء تثبيت التنبيه لجميع المستخدمين...');
-    
-                try {
-                    const usersToUnpinResult = await client.query('SELECT id, chat_id, pinned_alert_id FROM public.users WHERE pinned_alert_id IS NOT NULL');
-                    const users = usersToUnpinResult.rows;
-    
-                    if (users.length === 0) {
-                        return ctx.editMessageText('✅ لا يوجد مستخدمون لديهم تنبيهات مثبتة حاليًا.');
-                    }
-    
-                    let successCount = 0;
-                    let failureCount = 0;
-                    let processedCount = 0;
-    
-                    for (const user of users) {
-                        try {
-                            // محاولة إلغاء تثبيت الرسالة المحددة في محادثة المستخدم
-                            await bot.telegram.unpinChatMessage(user.chat_id, user.pinned_alert_id);
-                            successCount++;
-                        } catch (e) {
-                            // قد يفشل الأمر إذا قام المستخدم بحظر البوت
-                            console.error(`Failed to unpin for user ${user.id}:`, e.message);
-                            failureCount++;
-                        }
-                        
-                        processedCount++;
-                        // تحديث الرسالة كل 100 مستخدم لإظهار التقدم
-                        if (processedCount % 100 === 0) {
-                             await bot.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `⏳ جاري المعالجة... (${processedCount}/${users.length})`);
-                        }
-                    }
-    
-                    // بعد الانتهاء من الجميع، قم بتنظيف حقل الرسالة المثبتة في قاعدة البيانات
-                    await client.query('UPDATE public.users SET pinned_alert_id = NULL WHERE pinned_alert_id IS NOT NULL');
-    
-                    const finalMessage = `✅ اكتملت العملية.\n\n- تم إلغاء التثبيت بنجاح لـ: ${successCount} مستخدم.\n- فشل الإلغاء لـ: ${failureCount} مستخدم.`;
-                    await ctx.editMessageText(finalMessage);
-    
-                } catch(error) {
-                    console.error("Error during unpin_all process:", error);
-                    await ctx.editMessageText('❌ حدث خطأ فادح أثناء عملية إلغاء التثبيت.');
-                }
+                await ctx.editMessageText('📝 أرسل الآن أو وجّه الرسائل التي تريد استخدامها كتنبيه. عند الانتهاء، اضغط على زر "✅ إنهاء إضافة رسائل التنبيه".');
+                await refreshKeyboardView(ctx, userId, 'تم تفعيل وضع إضافة رسائل التنبيه.');
                 return;
             }
+            if (subAction === 'delete') {
+                // الخطوة 1: حذف التنبيه من الإعدادات
+                await client.query('UPDATE public.settings SET alert_message = NULL, alert_message_set_at = NULL, alert_duration_hours = NULL WHERE id = 1');
+                await ctx.answerCbQuery('تم الحذف، وجارٍ إلغاء التثبيت...');
+                await ctx.editMessageText('✅ تم حذف التنبيه من الإعدادات. الآن سيتم إلغاء تثبيته من عند جميع المستخدمين.');
+                
+                // الخطوة 2: بدء عملية إلغاء التثبيت للجميع
+                await unpinAllAlerts(ctx, client);
+                return;
+            }
+
+            if (subAction === 'unpin_all') {
+                await ctx.answerCbQuery();
+                // فقط قم باستدعاء الدالة الجديدة
+                await unpinAllAlerts(ctx, client);
+                return;
+            }
+        }
             // ==========================================================
             // |      ================ المنطق الجديد ينتهي هنا ===============      |
             // ==========================================================
