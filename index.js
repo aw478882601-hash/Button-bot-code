@@ -213,74 +213,67 @@ async function processAndFormatTopButtons(interval) {
         let title = '';
         let query;
 
-        // جزء ثابت لجلب إحصائيات اليوم المباشرة (من السجل الخام)
-        const dailyLiveQueryPart = `
-            SELECT b.id, b.text, COUNT(l.id) as clicks, COUNT(DISTINCT l.user_id) as users
-            FROM public.buttons b
-            JOIN public.button_clicks_log l ON b.id = l.button_id
-            -- الشرط الأساسي: فلترة بيانات اليوم فقط
-            WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
-            GROUP BY b.id, b.text
-        `;
-        
-        // جزء ثابت لجلب إحصائيات اليوم المؤرشفة (في حالة الأرشفة اليدوية الخاطئة)
-        const dailyArchivedQueryPart = `
-            SELECT b.id, b.text, s.total_clicks as clicks, s.unique_users_count as users
-            FROM public.buttons b
-            JOIN public.daily_button_stats s ON b.id = s.button_id
-            WHERE s.click_date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+        // استعلام متقدم لبناء المسار الكامل لكل زر
+        const pathCTE = `
+            WITH RECURSIVE button_path_cte AS (
+                SELECT id, text::text AS path FROM public.buttons WHERE parent_id IS NULL
+                UNION ALL
+                SELECT b.id, (p.path || ' / ' || b.text)::text
+                FROM public.buttons b INNER JOIN button_path_cte p ON b.parent_id = p.id
+            )
         `;
 
         if (interval === 'daily') {
             title = '*🏆 الأكثر استخداماً (اليوم):*';
-            // نجمع بين السجل المباشر والأرشيف لبيانات اليوم فقط
             query = `
-                WITH combined_today AS (
-                    ${dailyLiveQueryPart}
-                    UNION ALL
-                    ${dailyArchivedQueryPart}
-                )
-                SELECT text, SUM(clicks)::integer as clicks_count, SUM(users)::integer as unique_users
-                FROM combined_today
-                GROUP BY text ORDER BY clicks_count DESC LIMIT 10;
+                ${pathCTE}
+                SELECT
+                    p.path,
+                    COUNT(l.id)::integer AS clicks_count,
+                    COUNT(DISTINCT l.user_id)::integer AS unique_users
+                FROM public.button_clicks_log l
+                JOIN button_path_cte p ON p.id = l.button_id
+                WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+                GROUP BY p.path
+                ORDER BY clicks_count DESC
+                LIMIT 10;
             `;
-        } else { // الأسبوعي والكلي
-            let dateFilter = '';
-            if (interval === 'weekly') {
-                title = '*🏆 الأكثر استخداماً (أسبوعياً):*';
-                // الفلترة هنا تستبعد اليوم الحالي لأنه سيُضاف من السجل المباشر
-                dateFilter = `WHERE s.click_date >= date_trunc('week', now() AT TIME ZONE 'Africa/Cairo') AND s.click_date < (NOW() AT TIME ZONE 'Africa/Cairo')::date`;
-            } else {
-                title = '*🏆 الأكثر استخداماً (الكلي):*';
-                 dateFilter = `WHERE s.click_date < (NOW() AT TIME ZONE 'Africa/Cairo')::date`;
-            }
-
+        } else { // All-Time
+            title = '*🏆 الأكثر استخداماً (الكلي):*';
+            // الاستعلام يجمع بين الأرشيف الدائم والسجل المباشر
             query = `
-                WITH combined_stats AS (
-                    -- الأرشيف التاريخي (بدون اليوم)
-                    SELECT b.id, b.text, SUM(s.total_clicks) as clicks, SUM(s.unique_users_count) as users
-                    FROM public.buttons b JOIN public.daily_button_stats s ON b.id = s.button_id
-                    ${dateFilter}
-                    GROUP BY b.id, b.text
-                    UNION ALL
-                    -- بيانات اليوم الكاملة (مباشر + مؤرشف)
-                    ${dailyLiveQueryPart}
-                    UNION ALL
-                    ${dailyArchivedQueryPart}
-                )
-                SELECT text, SUM(clicks)::integer as clicks_count, SUM(users)::integer as unique_users
-                FROM combined_stats
-                GROUP BY text ORDER BY clicks_count DESC LIMIT 10;
+                ${pathCTE}
+                SELECT
+                    p.path,
+                    (
+                        (SELECT COUNT(*) FROM public.button_clicks_log l WHERE l.button_id = p.id) +
+                        (SELECT COALESCE(total_clicks, 0) FROM public.lifetime_button_stats s WHERE s.button_id = p.id)
+                    )::integer AS clicks_count
+                FROM
+                    button_path_cte p
+                JOIN (
+                    SELECT DISTINCT button_id FROM public.button_clicks_log
+                    UNION
+                    SELECT DISTINCT button_id FROM public.lifetime_button_stats
+                ) AS clicked_buttons ON p.id = clicked_buttons.button_id
+                ORDER BY
+                    clicks_count DESC
+                LIMIT 10;
             `;
         }
 
         const { rows } = await client.query(query);
-
         if (rows.length === 0) return `${title}\nلا توجد بيانات لعرضها.`;
         
-        const formattedRows = rows.map((row, index) =>
-            `${index + 1}. *${row.text}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\`\n   - 👤 المستخدمون: \`${row.unique_users || 0}\``
-        ).join('\n\n');
+        const formattedRows = rows.map((row, index) => {
+            let userText = '';
+            // عرض المستخدمين فقط في التقرير اليومي
+            if (interval === 'daily') {
+                userText = `\n   - 👤 المستخدمون: \`${row.unique_users || 0}\``;
+            }
+            // استخدام row.path لعرض المسار الكامل
+            return `${index + 1}. *${row.path}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
+        }).join('\n\n');
 
         return `${title}\n${formattedRows}`;
     } finally {
@@ -346,9 +339,10 @@ async function generateKeyboard(userId) {
     }
     
     // --- لوحة مفاتيح قسم الإشراف ---
+    // --- لوحة مفاتيح قسم الإشراف ---
     if (currentPath === 'supervision') {
         keyboardRows = [
-            ['📊 الإحصائيات', '🗣️ رسالة جماعية'],
+            ['📊 الإحصائيات'], // تم حذف زر الرسالة الجماعية
             ['🔔 رسالة التنبيه', '📝 تعديل رسالة الترحيب'],
             ['⚙️ تعديل المشرفين', '🚫 قائمة المحظورين'],
             ['🔙 رجوع', '🔝 القائمة الرئيسية']
@@ -1802,32 +1796,44 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             let supervisionCommandHandled = true;
             switch (text) {
                 case '📊 الإحصائيات': {
-                    const [ generalStatsData, topDaily, topWeekly, topAllTime ] = await Promise.all([
+                    const [ generalStatsData, topDaily, topAllTime ] = await Promise.all([
                         (async () => {
                             const client = await getClient();
                             try {
-                                const activeUsersResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active > NOW() - INTERVAL '1 DAY'");
+                                const active3dResult = await client.query("SELECT COUNT(DISTINCT id) FROM public.users WHERE last_active > NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '3 DAY'");
+                                const active7dResult = await client.query("SELECT COUNT(DISTINCT id) FROM public.users WHERE last_active > NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '7 DAY'");
+                                const inactive3dResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '3 DAY'");
+                                const inactive7dResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '7 DAY'");
                                 const totalButtonsResult = await client.query('SELECT COUNT(*) FROM public.buttons');
                                 const totalMessagesResult = await client.query('SELECT COUNT(*) FROM public.messages');
                                 const totalUsersResult = await client.query('SELECT COUNT(*) FROM public.users');
-                                const inactiveResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() - INTERVAL '10 DAY'");
                                 return {
-                                    dailyActiveUsers: activeUsersResult.rows[0].count,
+                                    active3d: active3dResult.rows[0].count,
+                                    active7d: active7dResult.rows[0].count,
+                                    inactive3d: inactive3dResult.rows[0].count,
+                                    inactive7d: inactive7dResult.rows[0].count,
                                     totalButtons: totalButtonsResult.rows[0].count,
                                     totalMessages: totalMessagesResult.rows[0].count,
                                     totalUsers: totalUsersResult.rows[0].count,
-                                    inactiveCount: inactiveResult.rows[0].count,
                                 };
                             } finally { client.release(); }
                         })(),
                         processAndFormatTopButtons('daily'),
-                        processAndFormatTopButtons('weekly'),
                         processAndFormatTopButtons('all_time')
                     ]);
-                    const { dailyActiveUsers, totalButtons, totalMessages, totalUsers, inactiveCount } = generalStatsData;
-                    const generalStats = `*📊 الإحصائيات العامة:*\n\n` + `👤 المستخدمون: \`${totalUsers}\` (نشط اليوم: \`${dailyActiveUsers}\`)\n` + `🔘 الأزرار: \`${totalButtons}\`\n` + `✉️ الرسائل: \`${totalMessages}\``;
-                    const inactiveUsersReport = `*👥 عدد المستخدمين غير النشطين (آخر 10 أيام):* \`${inactiveCount}\``;
-                    const finalReport = `${generalStats}\n\n---\n\n${topDaily}\n\n---\n\n${topWeekly}\n\n---\n\n${topAllTime}\n\n---\n\n${inactiveUsersReport}`;
+                    const { active3d, active7d, inactive3d, inactive7d, totalButtons, totalMessages, totalUsers } = generalStatsData;
+                    const generalStats = `*📊 الإحصائيات العامة:*\n\n` +
+                                         `👥 إجمالي المستخدمين: \`${totalUsers}\`\n` +
+                                         `📈 النشطون (آخر 3 أيام): \`${active3d}\`\n` +
+                                         `🗓️ النشطون (آخر 7 أيام): \`${active7d}\`\n\n` +
+                                         `🔘 الأزرار: \`${totalButtons}\`\n` +
+                                         `✉️ الرسائل: \`${totalMessages}\``;
+
+                    const inactiveUsersReport = `*🚫 المستخدمون غير النشطين:*\n` +
+                                                `- أكثر من 3 أيام: \`${inactive3d}\`\n` +
+                                                `- أكثر من 7 أيام: \`${inactive7d}\``;
+
+                    const finalReport = `${generalStats}\n\n---\n\n${topDaily}\n\n---\n\n${topAllTime}\n\n---\n\n${inactiveUsersReport}`;
                     await ctx.reply(finalReport, { parse_mode: 'Markdown' });
                     break;
                 }
@@ -2116,43 +2122,44 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.answerCbQuery(`الزر الآن ${adminOnly ? 'للمشرفين فقط' : 'للجميع'}`);
                 return;
             }
-          if (subAction === 'stats') {
-    const todayDate = new Date().toISOString().split('T')[0];
 
-    // 1. جلب إحصائيات اليوم (من السجل المباشر)
-    const todayResultLive = await client.query(`
-        SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users FROM public.button_clicks_log 
-        WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (now() AT TIME ZONE 'Africa/Cairo')::date`, 
-    [buttonId]);
-    
-    // 2. جلب إحصائيات اليوم التي قد تكون أُرشفت بالخطأ
-    const todayResultArchive = await client.query(`SELECT total_clicks as clicks, unique_users_count as users FROM public.daily_button_stats WHERE button_id = $1 AND click_date = $2`, [buttonId, todayDate]);
+        if (subAction === 'stats') {
+              const buttonId = parts[2];
 
-    // 3. جلب الإحصائيات التاريخية
-    const historicalResult = await client.query(`SELECT SUM(total_clicks) as clicks, SUM(unique_users_count) as users FROM public.daily_button_stats WHERE button_id = $1 AND click_date <> $2`, [buttonId, todayDate]);
+              // 1. جلب إحصائيات اليوم الدقيقة من السجل المباشر
+              const todayResult = await client.query(`
+                  SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users
+                  FROM public.button_clicks_log
+                  WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+              `, [buttonId]);
 
-    // تجميع النتائج
-    const dailyClicks = parseInt(todayResultLive.rows[0].clicks || 0) + parseInt(todayResultArchive.rows[0]?.clicks || 0);
-    const dailyUsers = parseInt(todayResultLive.rows[0].users || 0) + parseInt(todayResultArchive.rows[0]?.users || 0);
-    const historicalClicks = parseInt(historicalResult.rows[0].clicks || 0);
-    const totalClicks = dailyClicks + historicalClicks;
-    const totalUsers = dailyUsers + parseInt(historicalResult.rows[0].users || 0);
+              // 2. جلب إجمالي الضغطات (من السجل المباشر + الأرشيف الدائم)
+              const totalClicksResult = await client.query(`
+                  SELECT
+                      (
+                          (SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1) +
+                          (SELECT COALESCE(total_clicks, 0) FROM public.lifetime_button_stats WHERE button_id = $1)
+                      ) AS total;
+              `, [buttonId]);
 
-    const buttonTextResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
-    const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
+              const dailyClicks = parseInt(todayResult.rows[0].clicks || 0);
+              const dailyUsers = parseInt(todayResult.rows[0].users || 0);
+              const totalClicks = parseInt(totalClicksResult.rows[0].total || 0);
 
-    const statsMessage = `📊 <b>إحصائيات الزر: ${buttonName}</b>\n\n` +
-        `👆 <b>الضغطات:</b>\n` +
-        `  - اليوم: <code>${dailyClicks}</code>\n` +
-        `  - الكلي: <code>${totalClicks}</code>\n\n` +
-        `👤 <b>المستخدمون:</b>\n` +
-        `  - اليوم: <code>${dailyUsers}</code>\n` +
-        `  - الكلي: <code>${totalUsers}</code>`;
-    
-    await ctx.answerCbQuery();
-    await ctx.replyWithHTML(statsMessage);
-    return;
-}
+              const buttonTextResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
+              const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
+
+              const statsMessage = `📊 <b>إحصائيات الزر: ${buttonName}</b>\n\n` +
+                  `👆 <b>الضغطات:</b>\n` +
+                  `  - اليوم: <code>${dailyClicks}</code>\n` +
+                  `  - الكلي: <code>${totalClicks}</code>\n\n` +
+                  `👤 <b>المستخدمون:</b>\n` +
+                  `  - اليوم: <code>${dailyUsers}</code>`;
+              
+              await ctx.answerCbQuery();
+              await ctx.replyWithHTML(statsMessage);
+              return;
+          }
             
             // ---  ✨ الجزء الجديد الذي تمت إضافته ---
          // --- ✨✨✨ الجزء الجديد الخاص بتحريك الأزرار ✨✨✨ ---
