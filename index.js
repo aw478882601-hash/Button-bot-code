@@ -213,7 +213,6 @@ async function processAndFormatTopButtons(interval) {
         let title = '';
         let query;
 
-        // استعلام متقدم لبناء المسار الكامل لكل زر
         const pathCTE = `
             WITH RECURSIVE button_path_cte AS (
                 SELECT id, text::text AS path FROM public.buttons WHERE parent_id IS NULL
@@ -240,14 +239,14 @@ async function processAndFormatTopButtons(interval) {
             `;
         } else { // All-Time
             title = '*🏆 الأكثر استخداماً (الكلي):*';
-            // الاستعلام يجمع بين الأرشيف الدائم والسجل المباشر
             query = `
                 ${pathCTE}
                 SELECT
                     p.path,
                     (
                         (SELECT COUNT(*) FROM public.button_clicks_log l WHERE l.button_id = p.id) +
-                        (SELECT COALESCE(total_clicks, 0) FROM public.lifetime_button_stats s WHERE s.button_id = p.id)
+                        -- *** THE FIX IS HERE: The subquery is now wrapped in COALESCE ***
+                        COALESCE((SELECT s.total_clicks FROM public.lifetime_button_stats s WHERE s.button_id = p.id), 0)
                     )::integer AS clicks_count
                 FROM
                     button_path_cte p
@@ -267,11 +266,9 @@ async function processAndFormatTopButtons(interval) {
         
         const formattedRows = rows.map((row, index) => {
             let userText = '';
-            // عرض المستخدمين فقط في التقرير اليومي
             if (interval === 'daily') {
                 userText = `\n   - 👤 المستخدمون: \`${row.unique_users || 0}\``;
             }
-            // استخدام row.path لعرض المسار الكامل
             return `${index + 1}. *${row.path}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
         }).join('\n\n');
 
