@@ -2222,7 +2222,7 @@ bot.on('callback_query', async (ctx) => {
                 return;
             }
         }
-      if (action === 'msg') {
+     if (action === 'msg') {
             const msgAction = parts[1];
             const messageId = parts[2];
 
@@ -2260,7 +2260,7 @@ bot.on('callback_query', async (ctx) => {
                                  WHEN id = $3 THEN $4
                              END
                              WHERE id IN ($1, $3) AND button_id = $5`,
-                            // *** THE FIX IS HERE: Pass the .order property, not the whole object ***
+                            // *** ✨ هذا هو السطر الذي تم تعديله ***
                             [currentMessage.id, targetMessage.order, targetMessage.id, currentMessage.order, buttonId]
                         );
                         
