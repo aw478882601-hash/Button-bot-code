@@ -2249,19 +2249,14 @@ bot.on('callback_query', async (ctx) => {
             // ==========================================================
             // |      =============== THE FIX IS HERE (MESSAGES) ===============      |
             // ==========================================================
-           if (msgAction === 'up' || msgAction === 'down') {
+          if (msgAction === 'up' || msgAction === 'down') {
                 const currentMessage = messages[messageIndex];
                 const newOrder = msgAction === 'up' ? currentMessage.order - 1 : currentMessage.order + 1;
-
-                if (newOrder < 0 || newOrder >= messages.length) {
-                    return ctx.answerCbQuery('لا يمكن تحريك الرسالة أكثر.');
-                }
                 
                 const targetMessage = messages.find(m => m.order === newOrder);
 
                 if (targetMessage) {
                     try {
-                        // This single atomic command swaps the order numbers safely
                         await client.query(
                             `UPDATE public.messages
                              SET "order" = CASE
@@ -2269,6 +2264,7 @@ bot.on('callback_query', async (ctx) => {
                                  WHEN id = $3 THEN $4
                              END
                              WHERE id IN ($1, $3) AND button_id = $5`,
+                            // *** FIX: Pass the .order property, not the whole object ***
                             [currentMessage.id, targetMessage.order, targetMessage.id, currentMessage.order, buttonId]
                         );
                         
