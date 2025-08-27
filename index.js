@@ -1627,7 +1627,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             case '➕ إضافة زر':
                 if (isAdmin && state === 'EDITING_BUTTONS') {
                     await updateUserState(userId, { state: 'AWAITING_NEW_BUTTON_NAME' });
-                    return ctx.reply('أدخل اسم الزر الجديد:');
+                    return ctx.reply(' أدخل اسم الزر الجديد: يمكنك ادخال اكثر من اسم مفصولين ب enter اي كل اسم في سطر منفرد');
                 }
                 break;
             case '➕ إضافة رسالة':
