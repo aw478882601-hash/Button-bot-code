@@ -2253,6 +2253,11 @@ bot.on('callback_query', async (ctx) => {
 
                 if (targetMessage) {
                     try {
+                      console.log('--- DEBUGGING MESSAGE ORDER ---');
+            console.log('Current Message:', currentMessage);
+            console.log('Target Message:', targetMessage);
+            console.log(`Value of currentMessage.order is: ${currentMessage.order} (type: ${typeof currentMessage.order})`);
+            console.log(`Value of targetMessage.order is: ${targetMessage.order} (type: ${typeof targetMessage.order})`);
                         await client.query(
                             `UPDATE public.messages
                              SET "order" = CASE
