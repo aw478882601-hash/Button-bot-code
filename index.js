@@ -2253,29 +2253,37 @@ bot.on('callback_query', async (ctx) => {
 
                 if (targetMessage) {
                     try {
-                      console.log('--- DEBUGGING MESSAGE ORDER ---');
-            console.log('Current Message:', currentMessage);
-            console.log('Target Message:', targetMessage);
-            console.log(`Value of currentMessage.order is: ${currentMessage.order} (type: ${typeof currentMessage.order})`);
-            console.log(`Value of targetMessage.order is: ${targetMessage.order} (type: ${typeof targetMessage.order})`);
-                        await client.query(
-                            `UPDATE public.messages
-                             SET "order" = CASE
-                                 WHEN id = $1 THEN $2
-                                 WHEN id = $3 THEN $4
-                             END
-                             WHERE id IN ($1, $3) AND button_id = $5`,
-                            // *** ✨ هذا هو السطر الذي تم تعديله ليستخدم .order ***
-                            [currentMessage.id, parseInt(targetMessage.order), targetMessage.id, parseInt(currentMessage.order), buttonId]
-                        );
-                        
-                        await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
-                        await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
-                        
-                    } catch (e) {
-                        console.error("Error updating message order:", e);
-                        await ctx.reply('❌ حدث خطأ أثناء تحديث الترتيب.');
-                    }
+    // لا حاجة لـ console.log بعد الآن، لقد أدت مهمتها
+    
+    // الكود المحصّن يبقى كما هو للتأكد من عدم وجود قيم NaN
+    const currentOrderInt = parseInt(currentMessage.order, 10);
+    const targetOrderInt = parseInt(targetMessage.order, 10);
+
+    if (isNaN(currentOrderInt) || isNaN(targetOrderInt)) {
+        console.error(`Invalid order values detected. Current: ${currentMessage.order}, Target: ${targetMessage.order}`);
+        await ctx.reply('❌ حدث خطأ: قيمة الترتيب غير صالحة.');
+        return ctx.answerCbQuery('Invalid order value', { show_alert: true });
+    }
+
+    // ==================== التعديل النهائي هنا في استعلام SQL ====================
+    await client.query(
+        `UPDATE public.messages
+         SET "order" = CASE
+             WHEN id = $1 THEN $2::integer
+             WHEN id = $3 THEN $4::integer
+         END
+         WHERE id IN ($1, $3) AND button_id = $5`,
+        [currentMessage.id, targetOrderInt, targetMessage.id, currentOrderInt, buttonId]
+    );
+    // ========================================================================
+    
+    await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
+    await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
+    
+} catch (e) {
+    console.error("Error updating message order:", e);
+    await ctx.reply('❌ حدث خطأ أثناء تحديث الترتيب.');
+}
                 } else {
                     return ctx.answerCbQuery('لا يمكن تحريك الرسالة أكثر.');
                 }
