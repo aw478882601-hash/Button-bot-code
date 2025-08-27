@@ -2222,8 +2222,7 @@ bot.on('callback_query', async (ctx) => {
                 return;
             }
         }
-
-        if (action === 'msg') {
+if (action === 'msg') {
             const msgAction = parts[1];
             const messageId = parts[2];
 
@@ -2246,10 +2245,7 @@ bot.on('callback_query', async (ctx) => {
                 return ctx.answerCbQuery();
             }
             
-            // ==========================================================
-            // |      =============== THE FIX IS HERE (MESSAGES) ===============      |
-            // ==========================================================
-          if (msgAction === 'up' || msgAction === 'down') {
+            if (msgAction === 'up' || msgAction === 'down') {
                 const currentMessage = messages[messageIndex];
                 const newOrder = msgAction === 'up' ? currentMessage.order - 1 : currentMessage.order + 1;
                 
@@ -2303,6 +2299,7 @@ bot.on('callback_query', async (ctx) => {
                 return ctx.reply("📝 أرسل أو وجّه الرسالة التالية:", { reply_markup: { force_reply: true } });
             }
         }
+        
     } catch (error) {
         console.error("FATAL ERROR in callback_query handler:", error);
         console.error("Caused by callback_query data:", JSON.stringify(ctx.update.callback_query, null, 2));
