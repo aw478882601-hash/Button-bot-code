@@ -2252,10 +2252,8 @@ bot.on('callback_query', async (ctx) => {
                 const targetMessage = messages.find(m => m.order === newOrder);
 
                 if (targetMessage) {
-                    try {
-    // لا حاجة لـ console.log بعد الآن، لقد أدت مهمتها
-    
-    // الكود المحصّن يبقى كما هو للتأكد من عدم وجود قيم NaN
+
+                  try {
     const currentOrderInt = parseInt(currentMessage.order, 10);
     const targetOrderInt = parseInt(targetMessage.order, 10);
 
@@ -2265,24 +2263,23 @@ bot.on('callback_query', async (ctx) => {
         return ctx.answerCbQuery('Invalid order value', { show_alert: true });
     }
 
-    // ==================== التعديل النهائي هنا في استعلام SQL ====================
+    // ==================== الحل النهائي باستخدام التبديل الرياضي ====================
+    const sumOfOrders = currentOrderInt + targetOrderInt;
+
     await client.query(
         `UPDATE public.messages
-         SET "order" = CASE
-             WHEN id = $1 THEN $2::integer
-             WHEN id = $3 THEN $4::integer
-         END
-         WHERE id IN ($1, $3) AND button_id = $5`,
-        [currentMessage.id, targetOrderInt, targetMessage.id, currentOrderInt, buttonId]
+         SET "order" = ($1) - "order"
+         WHERE id IN ($2, $3) AND button_id = $4`,
+        [sumOfOrders, currentMessage.id, targetMessage.id, buttonId]
     );
     // ========================================================================
     
     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
-    await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
+    await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب بنجاح.');
     
 } catch (e) {
     console.error("Error updating message order:", e);
-    await ctx.reply('❌ حدث خطأ أثناء تحديث الترتيب.');
+    await ctx.reply('❌ حدث خطأ فادح أثناء تحديث الترتيب.');
 }
                 } else {
                     return ctx.answerCbQuery('لا يمكن تحريك الرسالة أكثر.');
