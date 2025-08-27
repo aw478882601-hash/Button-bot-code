@@ -2260,7 +2260,7 @@ bot.on('callback_query', async (ctx) => {
                                  WHEN id = $3 THEN $4
                              END
                              WHERE id IN ($1, $3) AND button_id = $5`,
-                            // *** ✨ هذا هو السطر الذي تم تعديله ***
+                            // *** ✨ هذا هو السطر الذي تم تعديله ليستخدم .order ***
                             [currentMessage.id, targetMessage.order, targetMessage.id, currentMessage.order, buttonId]
                         );
                         
