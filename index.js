@@ -2249,29 +2249,42 @@ bot.on('callback_query', async (ctx) => {
             // ==========================================================
             // |      =============== THE FIX IS HERE (MESSAGES) ===============      |
             // ==========================================================
-            if (msgAction === 'up' || msgAction === 'down') {
+           if (msgAction === 'up' || msgAction === 'down') {
                 const currentMessage = messages[messageIndex];
                 const newOrder = msgAction === 'up' ? currentMessage.order - 1 : currentMessage.order + 1;
-                const targetMessageResult = await client.query('SELECT id, "order" FROM public.messages WHERE button_id = $1 AND "order" = $2', [buttonId, newOrder]);
-                const targetMessage = targetMessageResult.rows[0];
+
+                if (newOrder < 0 || newOrder >= messages.length) {
+                    return ctx.answerCbQuery('لا يمكن تحريك الرسالة أكثر.');
+                }
+                
+                const targetMessage = messages.find(m => m.order === newOrder);
+
                 if (targetMessage) {
                     try {
-                        await client.query('BEGIN'); // Start transaction
-                        await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [targetMessage.order, currentMessage.id]);
-                        await client.query('UPDATE public.messages SET "order" = $1 WHERE id = $2', [currentMessage.order, targetMessage.id]);
-                        await client.query('COMMIT'); // Commit transaction
+                        // This single atomic command swaps the order numbers safely
+                        await client.query(
+                            `UPDATE public.messages
+                             SET "order" = CASE
+                                 WHEN id = $1 THEN $2
+                                 WHEN id = $3 THEN $4
+                             END
+                             WHERE id IN ($1, $3) AND button_id = $5`,
+                            [currentMessage.id, targetMessage.order, targetMessage.id, currentMessage.order, buttonId]
+                        );
+                        
                         await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                         await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب.');
-                        return ctx.answerCbQuery();
+                        
                     } catch (e) {
-                        await client.query('ROLLBACK'); // Rollback on error
                         console.error("Error updating message order:", e);
                         await ctx.reply('❌ حدث خطأ أثناء تحديث الترتيب.');
                     }
                 } else {
                     return ctx.answerCbQuery('لا يمكن تحريك الرسالة أكثر.');
                 }
+                return ctx.answerCbQuery();
             }
+            
             if (msgAction === 'edit') {
                  await updateUserState(userId, { state: 'AWAITING_EDITED_TEXT', stateData: { messageId: messageId, buttonId: buttonId } });
                  await ctx.answerCbQuery();
