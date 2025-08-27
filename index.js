@@ -1215,65 +1215,37 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                 return;
             }
 
-            if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_REPLACEMENT_FILE' || state === 'AWAITING_EDITED_TEXT' || state === 'AWAITING_NEW_CAPTION') {
+           if (state === 'AWAITING_NEW_MESSAGE' || state === 'AWAITING_REPLACEMENT_FILE' || state === 'AWAITING_EDITED_TEXT' || state === 'AWAITING_NEW_CAPTION') {
                 const { buttonId, messageId, targetOrder } = stateData;
                 if (!buttonId) {
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     return ctx.reply("⚠️ حدث خطأ: لم يتم العثور على الزر. تم إلغاء العملية.");
                 }
 
-              if (state === 'AWAITING_EDITED_TEXT') {
-                     if (!messageId) {
+                if (state === 'AWAITING_EDITED_TEXT') {
+                    // ... (This part is correct, no changes needed)
+                    if (!messageId) {
                         await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                         return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
                     }
-                    
-                    // --- ✨ الكود الجديد يبدأ هنا ---
                     let type, content, caption = '', entities = [];
-                    if (ctx.message.text) { 
-                        type = "text"; 
-                        content = ctx.message.text; 
-                        entities = ctx.message.entities || []; 
-                    } else if (ctx.message.photo) { 
-                        type = "photo"; 
-                        content = ctx.message.photo.pop().file_id;
-                        caption = ctx.message.caption || '';
-                        entities = ctx.message.caption_entities || [];
-                    } else if (ctx.message.video) { 
-                        type = "video"; 
-                        content = ctx.message.video.file_id;
-                        caption = ctx.message.caption || '';
-                        entities = ctx.message.caption_entities || [];
-                    } else if (ctx.message.document) { 
-                        type = "document"; 
-                        content = ctx.message.document.file_id;
-                        caption = ctx.message.caption || '';
-                        entities = ctx.message.caption_entities || [];
-                    } else if (ctx.message.audio) { 
-                        type = "audio"; 
-                        content = ctx.message.audio.file_id;
-                        caption = ctx.message.caption || '';
-                        entities = ctx.message.caption_entities || [];
-                    } else if (ctx.message.voice) { 
-                        type = "voice"; 
-                        content = ctx.message.voice.file_id;
-                        caption = ctx.message.caption || '';
-                        entities = ctx.message.voice.caption_entities || [];
-                    } else { 
-                        return ctx.reply('⚠️ نوع الرسالة غير مدعوم.');
-                    }
-
+                    if (ctx.message.text) { type = "text"; content = ctx.message.text; entities = ctx.message.entities || []; } 
+                    else if (ctx.message.photo) { type = "photo"; content = ctx.message.photo.pop().file_id; caption = ctx.message.caption || ''; entities = ctx.message.caption_entities || []; } 
+                    else if (ctx.message.video) { type = "video"; content = ctx.message.video.file_id; caption = ctx.message.caption || ''; entities = ctx.message.caption_entities || []; } 
+                    else if (ctx.message.document) { type = "document"; content = ctx.message.document.file_id; caption = ctx.message.caption || ''; entities = ctx.message.caption_entities || []; } 
+                    else if (ctx.message.audio) { type = "audio"; content = ctx.message.audio.file_id; caption = ctx.message.caption || ''; entities = ctx.message.caption_entities || []; } 
+                    else if (ctx.message.voice) { type = "voice"; content = ctx.message.voice.file_id; caption = ctx.message.caption || ''; entities = ctx.message.caption_entities || []; } 
+                    else { return ctx.reply('⚠️ نوع الرسالة غير مدعوم.'); }
                     const query = 'UPDATE public.messages SET type = $1, content = $2, caption = $3, entities = $4 WHERE id = $5';
                     const values = [type, content, caption, JSON.stringify(entities), messageId];
                     await client.query(query, values);
-                    // --- نهاية الكود الجديد ---
-
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الرسالة بنجاح.');
                     return;
                 }
                 
                 if (state === 'AWAITING_NEW_CAPTION') {
+                    // ... (This part is correct, no changes needed)
                      if (!messageId) {
                           await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                         return ctx.reply("⚠️ حدث خطأ. تم إلغاء التعديل.");
@@ -1290,6 +1262,8 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الشرح بنجاح.');
                     return;
                 }
+
+                // --- THE FIX IS IN THE LOGIC BELOW ---
 
                 let type, content, caption = ctx.message.caption || '', entities = ctx.message.caption_entities || [];
                 if (ctx.message.text) { type = "text"; content = ctx.message.text; caption = ""; entities = ctx.message.entities || []; }
@@ -1313,16 +1287,36 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     await client.query(query, values);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم استبدال الملف بنجاح.');
-                } else { // AWAITING_NEW_MESSAGE
-                    const maxOrderResult = await client.query('SELECT COALESCE(MAX("order"), -1) AS max_order FROM public.messages WHERE button_id = $1', [buttonId]);
-                    const newOrder = maxOrderResult.rows[0].max_order + 1;
-                    const query = 'INSERT INTO public.messages (button_id, "order", type, content, caption, entities) VALUES ($1, $2, $3, $4, $5, $6)';
-                    const values = [buttonId, targetOrder !== undefined ? targetOrder : newOrder, type, content, caption, JSON.stringify(entities)];
-                    await client.query(query, values);
-                    if (targetOrder !== undefined) {
-                        await client.query('UPDATE public.messages SET "order" = "order" + 1 WHERE button_id = $1 AND "order" >= $2 AND id <> (SELECT id FROM public.messages WHERE button_id = $1 AND "order" = $2)', [buttonId, targetOrder]);
-                    }
+                } else { // This block handles AWAITING_NEW_MESSAGE
+                    try {
+                        await client.query('BEGIN'); // Start transaction
 
+                        // Step 1: First, make space by updating the order of existing messages.
+                        if (targetOrder !== undefined) {
+                            await client.query(
+                                'UPDATE public.messages SET "order" = "order" + 1 WHERE button_id = $1 AND "order" >= $2',
+                                [buttonId, targetOrder]
+                            );
+                        }
+                        
+                        // If no targetOrder is specified, calculate the new order to be at the end.
+                        const finalOrder = targetOrder !== undefined
+                            ? targetOrder
+                            : (await client.query('SELECT COALESCE(MAX("order"), -1) + 1 AS next_order FROM public.messages WHERE button_id = $1', [buttonId])).rows[0].next_order;
+
+                        // Step 2: Now, safely insert the new message into the correct slot.
+                        const query = 'INSERT INTO public.messages (button_id, "order", type, content, caption, entities) VALUES ($1, $2, $3, $4, $5, $6)';
+                        const values = [buttonId, finalOrder, type, content, caption, JSON.stringify(entities)];
+                        await client.query(query, values);
+                        
+                        await client.query('COMMIT'); // Commit the successful transaction
+                    } catch (e) {
+                        await client.query('ROLLBACK'); // Rollback the transaction on error
+                        console.error("Error adding new message:", e);
+                        await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
+                        return ctx.reply("❌ حدث خطأ أثناء إضافة الرسالة. تم إلغاء العملية.");
+                    }
+                    
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم إضافة الرسالة بنجاح.');
                 }
