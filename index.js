@@ -2253,33 +2253,51 @@ bot.on('callback_query', async (ctx) => {
 
                 if (targetMessage) {
 
-                  try {
+                 // This replaces the entire try...catch block inside if (targetMessage)
+const transactionClient = await getClient(); // We get a dedicated client for the transaction
+try {
     const currentOrderInt = parseInt(currentMessage.order, 10);
     const targetOrderInt = parseInt(targetMessage.order, 10);
 
     if (isNaN(currentOrderInt) || isNaN(targetOrderInt)) {
-        console.error(`Invalid order values detected. Current: ${currentMessage.order}, Target: ${targetMessage.order}`);
         await ctx.reply('❌ حدث خطأ: قيمة الترتيب غير صالحة.');
         return ctx.answerCbQuery('Invalid order value', { show_alert: true });
     }
 
-    // ==================== الحل النهائي باستخدام التبديل الرياضي ====================
-    const sumOfOrders = currentOrderInt + targetOrderInt;
+    // --- The Correct 3-Step Swap inside a Transaction ---
 
-    await client.query(
-        `UPDATE public.messages
-         SET "order" = ($1) - "order"
-         WHERE id IN ($2, $3) AND button_id = $4`,
-        [sumOfOrders, currentMessage.id, targetMessage.id, buttonId]
+    await transactionClient.query('BEGIN'); // 1. Start the transaction
+
+    // 2. Move the first message to a temporary, non-conflicting spot (-1)
+    await transactionClient.query(
+        'UPDATE public.messages SET "order" = -1 WHERE id = $1 AND button_id = $2',
+        [currentMessage.id, buttonId]
     );
-    // ========================================================================
-    
+
+    // 3. Move the second message into the first message's now-vacant spot
+    await transactionClient.query(
+        'UPDATE public.messages SET "order" = $1 WHERE id = $2 AND button_id = $3',
+        [currentOrderInt, targetMessage.id, buttonId]
+    );
+
+    // 4. Move the first message from the temporary spot into the second message's original spot
+    await transactionClient.query(
+        'UPDATE public.messages SET "order" = $1 WHERE id = $2 AND button_id = $3',
+        [targetOrderInt, currentMessage.id, buttonId]
+    );
+
+    await transactionClient.query('COMMIT'); // 5. If all steps succeed, commit the changes
+
     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
     await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب بنجاح.');
-    
+
 } catch (e) {
-    console.error("Error updating message order:", e);
+    await transactionClient.query('ROLLBACK'); // If any step fails, undo everything
+    console.error("Error updating message order (transaction rolled back):", e);
     await ctx.reply('❌ حدث خطأ فادح أثناء تحديث الترتيب.');
+    
+} finally {
+    transactionClient.release(); // IMPORTANT: Always release the client back to the pool
 }
                 } else {
                     return ctx.answerCbQuery('لا يمكن تحريك الرسالة أكثر.');
