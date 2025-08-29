@@ -1171,7 +1171,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const values = [buttonId, newOrder, msg.type, msg.content, msg.caption, JSON.stringify(msg.entities)];
                     await client.query(query, values);
                 }
-                
+                await redis.del(`button_content:${buttonId}`);
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, `✅ تم إضافة ${collectedMessages.length} رسالة بنجاح.`);
                 return;
@@ -1283,6 +1283,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const query = 'UPDATE public.messages SET type = $1, content = $2, caption = $3, entities = $4 WHERE id = $5';
                     const values = [type, content, caption, JSON.stringify(entities), messageId];
                     await client.query(query, values);
+                  await redis.del(`button_content:${buttonId}`);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الرسالة بنجاح.');
                     return;
@@ -1302,6 +1303,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const query = 'UPDATE public.messages SET caption = $1, entities = $2 WHERE id = $3';
                     const values = [newCaption, JSON.stringify(newEntities), messageId];
                     await client.query(query, values);
+                  await redis.del(`button_content:${buttonId}`);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الشرح بنجاح.');
                     return;
@@ -1329,6 +1331,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const query = 'UPDATE public.messages SET type = $1, content = $2, caption = $3, entities = $4 WHERE id = $5';
                     const values = [type, content, caption, JSON.stringify(entities), messageId];
                     await client.query(query, values);
+                  await redis.del(`button_content:${buttonId}`);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم استبدال الملف بنجاح.');
                 } else { // This block handles AWAITING_NEW_MESSAGE
@@ -1354,6 +1357,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                         await client.query(query, values);
                         
                         await client.query('COMMIT'); // Commit the successful transaction
+                      await redis.del(`button_content:${buttonId}`);
                     } catch (e) {
                         await client.query('ROLLBACK'); // Rollback the transaction on error
                         console.error("Error adding new message:", e);
@@ -1930,18 +1934,17 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
         }
         
         // --- إذا لم يكن أي مما سبق، ابحث عن زر عادي في قاعدة البيانات ---
-        const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
+       const currentParentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
         
-        let buttonResult;
-        if (currentParentId === null) {
-            buttonResult = await client.query('SELECT id, is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL AND text = $1', [text]);
-        } else {
-            buttonResult = await client.query('SELECT id, is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 AND text = $2', [currentParentId, text]);
-        }
+        // نجلب قائمة الأزرار الحالية من الكاش
+        const parentContent = await getButtonContent(currentParentId, client);
+        // نبحث داخل القائمة عن الزر الذي يطابق النص المضغوط
+        const clickedButton = parentContent.subButtons.find(b => b.text === text);
+
+        if (!clickedButton) return; // لم يتم العثور على زر مطابق
         
-        const buttonInfo = buttonResult.rows[0];
-        if (!buttonInfo) return; // لم يتم العثور على زر مطابق
-        const buttonId = buttonInfo.id;
+        // حصلنا على ID الزر من الكاش مباشرة
+        const buttonId = clickedButton.id;
 
         if (isAdmin && state === 'AWAITING_SOURCE_BUTTON_TO_MOVE') {
             await updateUserState(userId, { state: 'AWAITING_DESTINATION_PATH', stateData: { sourceButtonId: buttonId, sourceButtonText: text } });
@@ -1963,11 +1966,10 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             }
             return;
         }
-        
-        const hasSubButtonsResult = await client.query('SELECT EXISTS(SELECT 1 FROM public.buttons WHERE parent_id = $1)', [buttonId]);
-        const hasMessagesResult = await client.query('SELECT EXISTS(SELECT 1 FROM public.messages WHERE button_id = $1)', [buttonId]);
-        const hasSubButtons = hasSubButtonsResult.rows[0].exists;
-        const hasMessages = hasMessagesResult.rows[0].exists;
+        // نجلب محتوى القسم الجديد (رسائله وأزراره) مرة واحدة من الكاش
+        const buttonContent = await getButtonContent(buttonId, client);
+        const hasSubButtons = buttonContent.subButtons && buttonContent.subButtons.length > 0;
+        const hasMessages = buttonContent.messages && buttonContent.messages.length > 0;
 
         await updateButtonStats(buttonId, userId);
 
@@ -1975,7 +1977,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
         
         if (canEnter) {
             await updateUserState(userId, { currentPath: `${currentPath}/${buttonId}` });
-            await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
+            await sendButtonMessages(ctx, buttonId, buttonContent.messages, state === 'EDITING_CONTENT');
            let replyText = `أنت الآن في قسم: ${text}`;
             if (state === 'AWAITING_DESTINATION' && !hasSubButtons && !hasMessages) {
                 const actionText = stateData.selectionAction === 'copy' ? 'النسخ' : 'النقل';
@@ -1985,7 +1987,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             }
             await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(userId)).resize());
         } else if (hasMessages) {
-            await sendButtonMessages(ctx, buttonId, false);
+          await sendButtonMessages(ctx, buttonId, buttonContent.messages, false);
         } else {
             await ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
@@ -2284,6 +2286,8 @@ bot.on('callback_query', async (ctx) => {
             if (msgAction === 'delete') {
                 await client.query('DELETE FROM public.messages WHERE id = $1', [messageId]);
                 await client.query('UPDATE public.messages SET "order" = "order" - 1 WHERE button_id = $1 AND "order" > $2', [buttonId, messages[messageIndex].order]);
+              await redis.del(`button_content:${buttonId}`);
+
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, '🗑️ تم الحذف بنجاح.');
                 return ctx.answerCbQuery();
@@ -2331,6 +2335,7 @@ try {
     );
 
     await transactionClient.query('COMMIT'); // 5. If all steps succeed, commit the changes
+await redis.del(`button_content:${buttonId}`);
 
     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
     await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب بنجاح.');
