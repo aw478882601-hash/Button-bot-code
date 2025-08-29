@@ -5,7 +5,6 @@
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
 const { Telegraf, Markup } = require('telegraf');
 const { Pool } = require('pg');
-const Redis = require('ioredis'); // <<-- 1. استدعاء مكتبة Redis
 
 // --- 2. تهيئة Pooler الاتصال بـ Supabase ---
 const pool = new Pool({
@@ -13,9 +12,6 @@ const pool = new Pool({
   ssl: {
     rejectUnauthorized: false
   }
-});
-const redis = new Redis(process.env.REDIS_URL, {
-  enableOfflineQueue: false
 });
 
 // --- 3. تهيئة البوت ---
@@ -33,86 +29,6 @@ async function getClient() {
         console.error('Failed to get a client from the pool:', error);
         throw error;
     }
-}
-async function getUser(userId) {
-    const cacheKey = `user_state:${userId}`;
-
-    // 1. حاول الجلب من الكاش أولاً
-    try {
-        const cachedUser = await redis.get(cacheKey);
-        if (cachedUser) {
-            return JSON.parse(cachedUser);
-        }
-    } catch (e) {
-        console.error("Redis GET user error:", e);
-    }
-
-    // 2. إذا لم يكن في الكاش، اذهب لقاعدة البيانات
-    const client = await getClient();
-    try {
-        const userResult = await client.query('SELECT * FROM public.users WHERE id = $1', [userId]);
-        const user = userResult.rows.length > 0 ? userResult.rows[0] : null;
-
-        // 3. خزّن النتيجة في الكاش لمدة قصيرة جداً (مثلاً 5 ثوانٍ)
-        if (user) {
-            try {
-                // TTL قصير لمنع البيانات القديمة وفي نفس الوقت خدمة الطلبات المتتالية السريعة من الكاش
-                await redis.set(cacheKey, JSON.stringify(user), 'EX', 5);
-            } catch (e) {
-                console.error("Redis SET user error:", e);
-            }
-        }
-        return user;
-    } finally {
-        client.release();
-    }
-}
-// <<-- دالة جديدة لجلب محتوى الزر مع نظام الكاش -->>
-async function getButtonContent(buttonId, client) {
-    // الحالة الخاصة بالجذر (القائمة الرئيسية) لا تحتاج كاش بنفس الطريقة
-    if (!buttonId || buttonId === 'root') {
-        const rootButtonsResult = await client.query('SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL ORDER BY "order"');
-        return { messages: [], subButtons: rootButtonsResult.rows };
-    }
-
-    // كل زر سيكون له مفتاح فريد في الكاش
-    const cacheKey = `button_content:${buttonId}`;
-
-    // 1. محاولة جلب البيانات من الكاش أولاً
-    try {
-        const cachedData = await redis.get(cacheKey);
-        if (cachedData) {
-            console.log(`CACHE HIT for button: ${buttonId}`); // رسالة للمطور للتأكد أن الكاش يعمل
-            return JSON.parse(cachedData); // البيانات موجودة، أرجعها فوراً
-        }
-    } catch (e) {
-        console.error("Redis GET error:", e);
-    }
-
-    // 2. إذا لم تكن في الكاش (Cache Miss)، اذهب إلى قاعدة البيانات
-    console.log(`CACHE MISS for button: ${buttonId}`); // رسالة للمطور لمعرفة متى يتم استخدام قاعدة البيانات
-
-    // نستخدم Promise.all لجلب الرسائل والأزرار بالتوازي لسرعة أكبر
-    const [messagesResult, subButtonsResult] = await Promise.all([
-        client.query('SELECT id, type, content, caption, entities, "order" FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]),
-        client.query('SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 ORDER BY "order"', [buttonId])
-    ]);
-
-    // نجمع كل البيانات (الرسائل والأزرار) في كائن واحد
-    const content = {
-        messages: messagesResult.rows,
-        subButtons: subButtonsResult.rows
-    };
-
-    // 3. تخزين النتيجة في الكاش للمرة القادمة (لمدة ساعة واحدة)
-    try {
-        // 'EX', 3600 تعني أن البيانات ستنتهي صلاحيتها وتحذف تلقائياً بعد ساعة
-        await redis.set(cacheKey, JSON.stringify(content), 'EX', 3600);
-    } catch (e) {
-        console.error("Redis SET error:", e);
-    }
-
-    return content;
 }
 // دالة جديدة مخصصة لعملية إلغاء التثبيت
 // دالة جديدة مخصصة لعملية إلغاء التثبيت (ترسل تقريرًا جديدًا)
@@ -270,19 +186,12 @@ async function updateUserState(userId, updates) {
 
         values.push(userId); // لإضافته في جملة WHERE
         const query = `UPDATE public.users SET ${fieldsToUpdate.join(', ')} WHERE id = $${paramIndex}`;
-    await client.query(query, values);    
-const cacheKey = `user_state:${userId}`;
-        try {
-            await redis.del(cacheKey);
-        } catch (e) {
-            console.error("Redis DEL user error:", e);
-        }
-
+        
+        await client.query(query, values);
     } finally {
         client.release();
     }
 }
-
 
 // دالة لتتبع الرسائل المرسلة للمستخدم في وضع التعديل
 async function trackSentMessages(userId, messageIds) {
@@ -440,11 +349,18 @@ async function generateKeyboard(userId) {
 
     // --- بناء لوحة المفاتيح الرئيسية ---
     let buttonsToRender;
-    const parentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
-
-    // السطران التاليان يقومان بنفس عمل كل الكود المحذوف، ولكن عبر الكاش
-    const content = await getButtonContent(parentId, client);
-    buttonsToRender = content.subButtons;
+    let query, values;
+    if (currentPath === 'root') {
+        query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL ORDER BY "order"';
+        values = [];
+    } else {
+        const parentId = currentPath.split('/').pop();
+        query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 ORDER BY "order"';
+        values = [parentId];
+    }
+    const buttonsResult = await client.query(query, values);
+    buttonsToRender = buttonsResult.rows;
+    
     let currentRow = [];
     buttonsToRender.forEach(button => {
         if (!button.admin_only || isAdmin) {
@@ -808,43 +724,25 @@ bot.command('info', async (ctx) => {
         client.release();
     }
 });
+
 const mainMessageHandler = async (ctx) => {
-    const client = await getClient(); // <<-- 1. أعدنا الاتصال الرئيسي لإصلاح الأعطال
+    const client = await getClient();
     try {
         const userId = String(ctx.from.id);
-        const user = await getUser(userId);
-
-        if (!user) {
-            // لا يمكننا استخدام bot.start مباشرة هنا لأنه قد يسبب حلقة لا نهائية
-            // إذا فشل إنشاء المستخدم، نرسل رسالة خطأ بسيطة.
-            console.error(`User ${userId} not found and bot.start() failed or is not available in this context.`);
-            return ctx.reply("عذرًا، حدث خطأ أثناء جلب بياناتك. يرجى المحاولة مرة أخرى باستخدام /start");
-        }
-
-        // <<-- 2. أصلحنا الخلل هنا بإضافة "last_active"
-        const { current_path: currentPath, state, is_admin: isAdmin, state_data: stateData, banned, last_active } = user;
-        
+        const userResult = await client.query('SELECT * FROM public.users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) return bot.start(ctx);
+        const { current_path: currentPath, state, is_admin: isAdmin, state_data: stateData, banned } = userResult.rows[0];
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
-
-        const lastActiveTime = new Date(last_active).getTime();
-        const currentTime = Date.now();
-        const FIVE_MINUTES_IN_MS = 5 * 60 * 1000;
-
-        if (currentTime - lastActiveTime > FIVE_MINUTES_IN_MS) {
-            // نستخدم نفس الـ client الرئيسي هنا للتحديث
-            client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId])
-                .catch(err => console.error("Failed to update last_active:", err));
-            
-            redis.del(`user_state:${userId}`).catch(e => console.error("Redis DEL user error:", e));
-        }
-
+        await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
+      // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
+      // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
       // =================================================================
 // |      =============== منطق عرض رسالة التنبيه (مُحسَّن) يبدأ هنا ===============      |
 // =================================================================
 try {
             const settingsResult = await client.query('SELECT alert_message, alert_message_set_at, alert_duration_hours FROM public.settings WHERE id = 1');
             const alert = settingsResult.rows[0];
-            const userLastSeen = user.last_alert_seen_at;
+            const userLastSeen = userResult.rows[0].last_alert_seen_at;
 
             if (alert && Array.isArray(alert.alert_message) && alert.alert_message.length > 0 && alert.alert_message_set_at) {
                 const alertSetAt = new Date(alert.alert_message_set_at);
@@ -1229,7 +1127,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const values = [buttonId, newOrder, msg.type, msg.content, msg.caption, JSON.stringify(msg.entities)];
                     await client.query(query, values);
                 }
-                await redis.del(`button_content:${buttonId}`);
+                
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, `✅ تم إضافة ${collectedMessages.length} رسالة بنجاح.`);
                 return;
@@ -1341,7 +1239,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const query = 'UPDATE public.messages SET type = $1, content = $2, caption = $3, entities = $4 WHERE id = $5';
                     const values = [type, content, caption, JSON.stringify(entities), messageId];
                     await client.query(query, values);
-                  await redis.del(`button_content:${buttonId}`);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الرسالة بنجاح.');
                     return;
@@ -1361,7 +1258,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const query = 'UPDATE public.messages SET caption = $1, entities = $2 WHERE id = $3';
                     const values = [newCaption, JSON.stringify(newEntities), messageId];
                     await client.query(query, values);
-                  await redis.del(`button_content:${buttonId}`);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم تحديث الشرح بنجاح.');
                     return;
@@ -1389,7 +1285,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     const query = 'UPDATE public.messages SET type = $1, content = $2, caption = $3, entities = $4 WHERE id = $5';
                     const values = [type, content, caption, JSON.stringify(entities), messageId];
                     await client.query(query, values);
-                  await redis.del(`button_content:${buttonId}`);
                     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                     await refreshAdminView(ctx, userId, buttonId, '✅ تم استبدال الملف بنجاح.');
                 } else { // This block handles AWAITING_NEW_MESSAGE
@@ -1415,7 +1310,6 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                         await client.query(query, values);
                         
                         await client.query('COMMIT'); // Commit the successful transaction
-                      await redis.del(`button_content:${buttonId}`);
                     } catch (e) {
                         await client.query('ROLLBACK'); // Rollback the transaction on error
                         console.error("Error adding new message:", e);
@@ -1992,25 +1886,25 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
         }
         
         // --- إذا لم يكن أي مما سبق، ابحث عن زر عادي في قاعدة البيانات ---
-       // --- إذا لم يكن أي مما سبق، ابحث عن زر عادي ---
-        const currentParentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
+        const currentParentId = currentPath === 'root' ? null : currentPath.split('/').pop();
         
-        // <<-- 1. نجلب أزرار القسم الحالي من الكاش -->>
-        const parentContent = await getButtonContent(currentParentId, client);
-        // <<-- 2. نبحث عن الزر المضغوط داخل القائمة التي جلبناها -->>
-        const clickedButton = parentContent.subButtons.find(b => b.text === text);
-
-        if (!clickedButton) return; // لم يتم العثور على زر مطابق، تجاهل الرسالة
+        let buttonResult;
+        if (currentParentId === null) {
+            buttonResult = await client.query('SELECT id, is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL AND text = $1', [text]);
+        } else {
+            buttonResult = await client.query('SELECT id, is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 AND text = $2', [currentParentId, text]);
+        }
         
-        const buttonId = clickedButton.id;
+        const buttonInfo = buttonResult.rows[0];
+        if (!buttonInfo) return; // لم يتم العثور على زر مطابق
+        const buttonId = buttonInfo.id;
 
         if (isAdmin && state === 'AWAITING_SOURCE_BUTTON_TO_MOVE') {
             await updateUserState(userId, { state: 'AWAITING_DESTINATION_PATH', stateData: { sourceButtonId: buttonId, sourceButtonText: text } });
             return ctx.reply(`✅ تم اختيار [${text}].\n\n🚙 الآن، تنقّل بحرية داخل البوت وعندما تصل للمكان المطلوب اضغط على زر "✅ النقل إلى هنا".`, Markup.keyboard(await generateKeyboard(userId)).resize());
         }
 
-        // <<-- 3. هنا تم إصلاح الخطأ: نستخدم clickedButton بدلاً من buttonInfo -->>
-        if (clickedButton.admin_only && !isAdmin) {
+        if (buttonInfo.admin_only && !isAdmin) {
             return ctx.reply('🚫 عذراً، هذا القسم مخصص للمشرفين فقط.');
         }
 
@@ -2026,10 +1920,10 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             return;
         }
         
-        // <<-- 4. نجلب محتوى القسم الجديد (رسائله وأزراره) مرة واحدة من الكاش -->>
-        const buttonContent = await getButtonContent(buttonId, client);
-        const hasSubButtons = buttonContent.subButtons && buttonContent.subButtons.length > 0;
-        const hasMessages = buttonContent.messages && buttonContent.messages.length > 0;
+        const hasSubButtonsResult = await client.query('SELECT EXISTS(SELECT 1 FROM public.buttons WHERE parent_id = $1)', [buttonId]);
+        const hasMessagesResult = await client.query('SELECT EXISTS(SELECT 1 FROM public.messages WHERE button_id = $1)', [buttonId]);
+        const hasSubButtons = hasSubButtonsResult.rows[0].exists;
+        const hasMessages = hasMessagesResult.rows[0].exists;
 
         await updateButtonStats(buttonId, userId);
 
@@ -2037,8 +1931,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
         
         if (canEnter) {
             await updateUserState(userId, { currentPath: `${currentPath}/${buttonId}` });
-            // <<-- 5. نمرر الرسائل الجاهزة من الكاش إلى دالة الإرسال -->>
-            await sendButtonMessages(ctx, buttonId, buttonContent.messages, state === 'EDITING_CONTENT');
+            await sendButtonMessages(ctx, buttonId, state === 'EDITING_CONTENT');
            let replyText = `أنت الآن في قسم: ${text}`;
             if (state === 'AWAITING_DESTINATION' && !hasSubButtons && !hasMessages) {
                 const actionText = stateData.selectionAction === 'copy' ? 'النسخ' : 'النقل';
@@ -2048,8 +1941,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             }
             await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(userId)).resize());
         } else if (hasMessages) {
-             // <<-- 6. نمرر الرسائل الجاهزة من الكاش إلى دالة الإرسال -->>
-            await sendButtonMessages(ctx, buttonId, buttonContent.messages, false);
+            await sendButtonMessages(ctx, buttonId, false);
         } else {
             await ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
@@ -2348,8 +2240,6 @@ bot.on('callback_query', async (ctx) => {
             if (msgAction === 'delete') {
                 await client.query('DELETE FROM public.messages WHERE id = $1', [messageId]);
                 await client.query('UPDATE public.messages SET "order" = "order" - 1 WHERE button_id = $1 AND "order" > $2', [buttonId, messages[messageIndex].order]);
-              await redis.del(`button_content:${buttonId}`);
-
                 await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
                 await refreshAdminView(ctx, userId, buttonId, '🗑️ تم الحذف بنجاح.');
                 return ctx.answerCbQuery();
@@ -2397,7 +2287,6 @@ try {
     );
 
     await transactionClient.query('COMMIT'); // 5. If all steps succeed, commit the changes
-await redis.del(`button_content:${buttonId}`);
 
     await updateUserState(userId, { state: 'EDITING_CONTENT', stateData: {} });
     await refreshAdminView(ctx, userId, buttonId, '↕️ تم تحديث الترتيب بنجاح.');
