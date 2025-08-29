@@ -5,6 +5,7 @@
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
 const { Telegraf, Markup } = require('telegraf');
 const { Pool } = require('pg');
+const Redis = require('ioredis'); // <<-- 1. استدعاء مكتبة Redis
 
 // --- 2. تهيئة Pooler الاتصال بـ Supabase ---
 const pool = new Pool({
@@ -12,6 +13,9 @@ const pool = new Pool({
   ssl: {
     rejectUnauthorized: false
   }
+});
+const redis = new Redis(process.env.REDIS_URL, {
+  enableOfflineQueue: false
 });
 
 // --- 3. تهيئة البوت ---
