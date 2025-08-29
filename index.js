@@ -838,7 +838,7 @@ const mainMessageHandler = async (ctx) => {
         }
 
         // ... continue with the rest of your function's logic
-        }
+        
       // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
       // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
       // =================================================================
