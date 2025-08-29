@@ -808,15 +808,20 @@ bot.command('info', async (ctx) => {
         client.release();
     }
 });
-
 const mainMessageHandler = async (ctx) => {
+    const client = await getClient(); // <<-- 1. أعدنا الاتصال الرئيسي لإصلاح الأعطال
     try {
         const userId = String(ctx.from.id);
         const user = await getUser(userId);
 
-        if (!user) return bot.start(ctx);
+        if (!user) {
+            // لا يمكننا استخدام bot.start مباشرة هنا لأنه قد يسبب حلقة لا نهائية
+            // إذا فشل إنشاء المستخدم، نرسل رسالة خطأ بسيطة.
+            console.error(`User ${userId} not found and bot.start() failed or is not available in this context.`);
+            return ctx.reply("عذرًا، حدث خطأ أثناء جلب بياناتك. يرجى المحاولة مرة أخرى باستخدام /start");
+        }
 
-        // FIX 1: Added "last_active" to the destructuring
+        // <<-- 2. أصلحنا الخلل هنا بإضافة "last_active"
         const { current_path: currentPath, state, is_admin: isAdmin, state_data: stateData, banned, last_active } = user;
         
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
@@ -826,21 +831,13 @@ const mainMessageHandler = async (ctx) => {
         const FIVE_MINUTES_IN_MS = 5 * 60 * 1000;
 
         if (currentTime - lastActiveTime > FIVE_MINUTES_IN_MS) {
-            // "Fire and forget" - this part is perfect.
-            getClient().then(client => {
-                client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId])
-                    .catch(err => console.error("Failed to update last_active:", err))
-                    .finally(() => client.release());
-            });
+            // نستخدم نفس الـ client الرئيسي هنا للتحديث
+            client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId])
+                .catch(err => console.error("Failed to update last_active:", err));
             
-            // Invalidate the cache - this part is also perfect.
             redis.del(`user_state:${userId}`).catch(e => console.error("Redis DEL user error:", e));
         }
 
-        // ... continue with the rest of your function's logic
-        
-      // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
-      // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
       // =================================================================
 // |      =============== منطق عرض رسالة التنبيه (مُحسَّن) يبدأ هنا ===============      |
 // =================================================================
