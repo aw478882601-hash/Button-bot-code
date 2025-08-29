@@ -1934,16 +1934,16 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
         }
         
         // --- إذا لم يكن أي مما سبق، ابحث عن زر عادي في قاعدة البيانات ---
-       const currentParentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
+       // --- إذا لم يكن أي مما سبق، ابحث عن زر عادي ---
+        const currentParentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
         
-        // نجلب قائمة الأزرار الحالية من الكاش
+        // <<-- 1. نجلب أزرار القسم الحالي من الكاش -->>
         const parentContent = await getButtonContent(currentParentId, client);
-        // نبحث داخل القائمة عن الزر الذي يطابق النص المضغوط
+        // <<-- 2. نبحث عن الزر المضغوط داخل القائمة التي جلبناها -->>
         const clickedButton = parentContent.subButtons.find(b => b.text === text);
 
-        if (!clickedButton) return; // لم يتم العثور على زر مطابق
+        if (!clickedButton) return; // لم يتم العثور على زر مطابق، تجاهل الرسالة
         
-        // حصلنا على ID الزر من الكاش مباشرة
         const buttonId = clickedButton.id;
 
         if (isAdmin && state === 'AWAITING_SOURCE_BUTTON_TO_MOVE') {
@@ -1951,7 +1951,8 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             return ctx.reply(`✅ تم اختيار [${text}].\n\n🚙 الآن، تنقّل بحرية داخل البوت وعندما تصل للمكان المطلوب اضغط على زر "✅ النقل إلى هنا".`, Markup.keyboard(await generateKeyboard(userId)).resize());
         }
 
-        if (buttonInfo.admin_only && !isAdmin) {
+        // <<-- 3. هنا تم إصلاح الخطأ: نستخدم clickedButton بدلاً من buttonInfo -->>
+        if (clickedButton.admin_only && !isAdmin) {
             return ctx.reply('🚫 عذراً، هذا القسم مخصص للمشرفين فقط.');
         }
 
@@ -1966,7 +1967,8 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             }
             return;
         }
-        // نجلب محتوى القسم الجديد (رسائله وأزراره) مرة واحدة من الكاش
+        
+        // <<-- 4. نجلب محتوى القسم الجديد (رسائله وأزراره) مرة واحدة من الكاش -->>
         const buttonContent = await getButtonContent(buttonId, client);
         const hasSubButtons = buttonContent.subButtons && buttonContent.subButtons.length > 0;
         const hasMessages = buttonContent.messages && buttonContent.messages.length > 0;
@@ -1977,6 +1979,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
         
         if (canEnter) {
             await updateUserState(userId, { currentPath: `${currentPath}/${buttonId}` });
+            // <<-- 5. نمرر الرسائل الجاهزة من الكاش إلى دالة الإرسال -->>
             await sendButtonMessages(ctx, buttonId, buttonContent.messages, state === 'EDITING_CONTENT');
            let replyText = `أنت الآن في قسم: ${text}`;
             if (state === 'AWAITING_DESTINATION' && !hasSubButtons && !hasMessages) {
@@ -1987,7 +1990,8 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             }
             await ctx.reply(replyText, Markup.keyboard(await generateKeyboard(userId)).resize());
         } else if (hasMessages) {
-          await sendButtonMessages(ctx, buttonId, buttonContent.messages, false);
+             // <<-- 6. نمرر الرسائل الجاهزة من الكاش إلى دالة الإرسال -->>
+            await sendButtonMessages(ctx, buttonId, buttonContent.messages, false);
         } else {
             await ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
