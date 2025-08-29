@@ -34,6 +34,53 @@ async function getClient() {
         throw error;
     }
 }
+// <<-- دالة جديدة لجلب محتوى الزر مع نظام الكاش -->>
+async function getButtonContent(buttonId, client) {
+    // الحالة الخاصة بالجذر (القائمة الرئيسية) لا تحتاج كاش بنفس الطريقة
+    if (!buttonId || buttonId === 'root') {
+        const rootButtonsResult = await client.query('SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL ORDER BY "order"');
+        return { messages: [], subButtons: rootButtonsResult.rows };
+    }
+
+    // كل زر سيكون له مفتاح فريد في الكاش
+    const cacheKey = `button_content:${buttonId}`;
+
+    // 1. محاولة جلب البيانات من الكاش أولاً
+    try {
+        const cachedData = await redis.get(cacheKey);
+        if (cachedData) {
+            console.log(`CACHE HIT for button: ${buttonId}`); // رسالة للمطور للتأكد أن الكاش يعمل
+            return JSON.parse(cachedData); // البيانات موجودة، أرجعها فوراً
+        }
+    } catch (e) {
+        console.error("Redis GET error:", e);
+    }
+
+    // 2. إذا لم تكن في الكاش (Cache Miss)، اذهب إلى قاعدة البيانات
+    console.log(`CACHE MISS for button: ${buttonId}`); // رسالة للمطور لمعرفة متى يتم استخدام قاعدة البيانات
+
+    // نستخدم Promise.all لجلب الرسائل والأزرار بالتوازي لسرعة أكبر
+    const [messagesResult, subButtonsResult] = await Promise.all([
+        client.query('SELECT id, type, content, caption, entities, "order" FROM public.messages WHERE button_id = $1 ORDER BY "order"', [buttonId]),
+        client.query('SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 ORDER BY "order"', [buttonId])
+    ]);
+
+    // نجمع كل البيانات (الرسائل والأزرار) في كائن واحد
+    const content = {
+        messages: messagesResult.rows,
+        subButtons: subButtonsResult.rows
+    };
+
+    // 3. تخزين النتيجة في الكاش للمرة القادمة (لمدة ساعة واحدة)
+    try {
+        // 'EX', 3600 تعني أن البيانات ستنتهي صلاحيتها وتحذف تلقائياً بعد ساعة
+        await redis.set(cacheKey, JSON.stringify(content), 'EX', 3600);
+    } catch (e) {
+        console.error("Redis SET error:", e);
+    }
+
+    return content;
+}
 // دالة جديدة مخصصة لعملية إلغاء التثبيت
 // دالة جديدة مخصصة لعملية إلغاء التثبيت (ترسل تقريرًا جديدًا)
 async function unpinAllAlerts(ctx, client) {
@@ -353,18 +400,11 @@ async function generateKeyboard(userId) {
 
     // --- بناء لوحة المفاتيح الرئيسية ---
     let buttonsToRender;
-    let query, values;
-    if (currentPath === 'root') {
-        query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id IS NULL ORDER BY "order"';
-        values = [];
-    } else {
-        const parentId = currentPath.split('/').pop();
-        query = 'SELECT id, text, "order", is_full_width, admin_only FROM public.buttons WHERE parent_id = $1 ORDER BY "order"';
-        values = [parentId];
-    }
-    const buttonsResult = await client.query(query, values);
-    buttonsToRender = buttonsResult.rows;
-    
+    const parentId = currentPath === 'root' ? 'root' : currentPath.split('/').pop();
+
+    // السطران التاليان يقومان بنفس عمل كل الكود المحذوف، ولكن عبر الكاش
+    const content = await getButtonContent(parentId, client);
+    buttonsToRender = content.subButtons;
     let currentRow = [];
     buttonsToRender.forEach(button => {
         if (!button.admin_only || isAdmin) {
