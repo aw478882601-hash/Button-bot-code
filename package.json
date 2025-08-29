@@ -7,8 +7,8 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "pg": "^8.11.3",
-    "telegraf": "^4.15.3"
-      "ioredis": "^5.4.1"
-  }
+  "pg": "^8.7.3",
+  "telegraf": "^4.7.0", // <-- الفاصلة ضرورية هنا للفصل بين العناصر
+  "ioredis": "^5.4.1"
+}
 }
