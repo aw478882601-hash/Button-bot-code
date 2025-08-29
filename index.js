@@ -844,7 +844,7 @@ const mainMessageHandler = async (ctx) => {
 try {
             const settingsResult = await client.query('SELECT alert_message, alert_message_set_at, alert_duration_hours FROM public.settings WHERE id = 1');
             const alert = settingsResult.rows[0];
-            const userLastSeen = userResult.rows[0].last_alert_seen_at;
+            const userLastSeen = user.last_alert_seen_at;
 
             if (alert && Array.isArray(alert.alert_message) && alert.alert_message.length > 0 && alert.alert_message_set_at) {
                 const alertSetAt = new Date(alert.alert_message_set_at);
