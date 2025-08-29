@@ -34,6 +34,39 @@ async function getClient() {
         throw error;
     }
 }
+async function getUser(userId) {
+    const cacheKey = `user_state:${userId}`;
+
+    // 1. حاول الجلب من الكاش أولاً
+    try {
+        const cachedUser = await redis.get(cacheKey);
+        if (cachedUser) {
+            return JSON.parse(cachedUser);
+        }
+    } catch (e) {
+        console.error("Redis GET user error:", e);
+    }
+
+    // 2. إذا لم يكن في الكاش، اذهب لقاعدة البيانات
+    const client = await getClient();
+    try {
+        const userResult = await client.query('SELECT * FROM public.users WHERE id = $1', [userId]);
+        const user = userResult.rows.length > 0 ? userResult.rows[0] : null;
+
+        // 3. خزّن النتيجة في الكاش لمدة قصيرة جداً (مثلاً 5 ثوانٍ)
+        if (user) {
+            try {
+                // TTL قصير لمنع البيانات القديمة وفي نفس الوقت خدمة الطلبات المتتالية السريعة من الكاش
+                await redis.set(cacheKey, JSON.stringify(user), 'EX', 5);
+            } catch (e) {
+                console.error("Redis SET user error:", e);
+            }
+        }
+        return user;
+    } finally {
+        client.release();
+    }
+}
 // <<-- دالة جديدة لجلب محتوى الزر مع نظام الكاش -->>
 async function getButtonContent(buttonId, client) {
     // الحالة الخاصة بالجذر (القائمة الرئيسية) لا تحتاج كاش بنفس الطريقة
@@ -237,12 +270,19 @@ async function updateUserState(userId, updates) {
 
         values.push(userId); // لإضافته في جملة WHERE
         const query = `UPDATE public.users SET ${fieldsToUpdate.join(', ')} WHERE id = $${paramIndex}`;
-        
-        await client.query(query, values);
+    await client.query(query, values);    
+const cacheKey = `user_state:${userId}`;
+        try {
+            await redis.del(cacheKey);
+        } catch (e) {
+            console.error("Redis DEL user error:", e);
+        }
+
     } finally {
         client.release();
     }
 }
+
 
 // دالة لتتبع الرسائل المرسلة للمستخدم في وضع التعديل
 async function trackSentMessages(userId, messageIds) {
@@ -770,14 +810,35 @@ bot.command('info', async (ctx) => {
 });
 
 const mainMessageHandler = async (ctx) => {
-    const client = await getClient();
     try {
         const userId = String(ctx.from.id);
-        const userResult = await client.query('SELECT * FROM public.users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) return bot.start(ctx);
-        const { current_path: currentPath, state, is_admin: isAdmin, state_data: stateData, banned } = userResult.rows[0];
+        const user = await getUser(userId);
+
+        if (!user) return bot.start(ctx);
+
+        // FIX 1: Added "last_active" to the destructuring
+        const { current_path: currentPath, state, is_admin: isAdmin, state_data: stateData, banned, last_active } = user;
+        
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
-        await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
+
+        const lastActiveTime = new Date(last_active).getTime();
+        const currentTime = Date.now();
+        const FIVE_MINUTES_IN_MS = 5 * 60 * 1000;
+
+        if (currentTime - lastActiveTime > FIVE_MINUTES_IN_MS) {
+            // "Fire and forget" - this part is perfect.
+            getClient().then(client => {
+                client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId])
+                    .catch(err => console.error("Failed to update last_active:", err))
+                    .finally(() => client.release());
+            });
+            
+            // Invalidate the cache - this part is also perfect.
+            redis.del(`user_state:${userId}`).catch(e => console.error("Redis DEL user error:", e));
+        }
+
+        // ... continue with the rest of your function's logic
+        }
       // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
       // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
       // =================================================================
