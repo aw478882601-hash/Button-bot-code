@@ -310,6 +310,8 @@ async function generateKeyboard(userId) {
     let keyboardRows = [];
 
     // --- لوحات المفاتيح الخاصة بالحالات ---
+    if (state === 'CONTACTING_ADMIN') {
+        return [['❌ إلغاء العملية']];
     if (state === 'AWAITING_ALERT_MESSAGES') {
         return [['✅ إنهاء إضافة رسائل التنبيه']];
     }
@@ -775,6 +777,24 @@ for (const messageObject of alert.alert_message) {
             // تم حذف parse_mode من هنا
             await ctx.replyWithVideo(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities });
             break;
+        case 'poll':
+            const pollOptions = {
+                is_anonymous: messageObject.is_anonymous,
+                allows_multiple_answers: messageObject.allows_multiple_answers,
+                // إذا كان اختباراً، أضف الخيارات الخاصة به
+                ...(messageObject.is_quiz && {
+                    type: 'quiz',
+                    correct_option_id: messageObject.correct_option_id,
+                    explanation: messageObject.explanation,
+                    explanation_entities: messageObject.explanation_entities
+                })
+            };
+            await ctx.replyWithPoll(
+                messageObject.question,
+                messageObject.options,
+                pollOptions
+            );
+            break;
     }
 }
 //...
@@ -1090,6 +1110,20 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             else if (ctx.message.photo) { messageObject = { type: "photo", content: ctx.message.photo.pop().file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] }; }
             else if (ctx.message.document) { messageObject = { type: "document", content: ctx.message.document.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] }; }
             else if (ctx.message.video) { messageObject = { type: "video", content: ctx.message.video.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] }; }
+              else if (ctx.message.poll) {
+        const poll = ctx.message.poll;
+        messageObject = {
+            type: "poll",
+            question: poll.question,
+            options: poll.options.map(o => o.text), // نستخرج نصوص الخيارات فقط
+            is_quiz: poll.type === 'quiz', // لتحديد ما إذا كان اختباراً
+            correct_option_id: poll.correct_option_id,
+            explanation: poll.explanation,
+            explanation_entities: poll.explanation_entities,
+            allows_multiple_answers: poll.allows_multiple_answers,
+            is_anonymous: poll.is_anonymous
+        };
+    }
             else { return ctx.reply("⚠️ نوع الرسالة غير مدعوم حاليًا."); }
             
             const updatedMessages = [...collectedMessages, messageObject];
@@ -1492,6 +1526,11 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
         
         // هذا المقطع للرسالة الأولى فقط (يرسلها للجميع)
         if (state === 'CONTACTING_ADMIN') {
+          if (ctx.message && ctx.message.text === '❌ إلغاء العملية') {
+                await updateUserState(userId, { state: 'NORMAL', stateData: {} });
+                await ctx.reply('👍 تم إلغاء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                return;
+            }
             const adminsResult = await client.query('SELECT id FROM public.users WHERE is_admin = true');
             const adminIds = adminsResult.rows.map(row => String(row.id));
             if (adminIds.length === 0) {
