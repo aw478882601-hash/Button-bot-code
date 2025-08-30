@@ -312,6 +312,7 @@ async function generateKeyboard(userId) {
     // --- لوحات المفاتيح الخاصة بالحالات ---
     if (state === 'CONTACTING_ADMIN') {
         return [['❌ إلغاء العملية']];
+    }
     if (state === 'AWAITING_ALERT_MESSAGES') {
         return [['✅ إنهاء إضافة رسائل التنبيه']];
     }
