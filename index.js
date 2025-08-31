@@ -1862,7 +1862,7 @@ if (state === 'CONTACTING_ADMIN') {
             let supervisionCommandHandled = true;
             switch (text) {
                 case '📊 الإحصائيات': {
-                    const [ generalStatsData, topDaily, topAllTime ] = await Promise.all([
+                    const [ generalStatsData, topDaily, topAllTime, dailyTotalClicksResult ] = await Promise.all([
                         (async () => {
                             const client = await getClient();
                             try {
@@ -1873,6 +1873,7 @@ if (state === 'CONTACTING_ADMIN') {
                                 const totalButtonsResult = await client.query('SELECT COUNT(*) FROM public.buttons');
                                 const totalMessagesResult = await client.query('SELECT COUNT(*) FROM public.messages');
                                 const totalUsersResult = await client.query('SELECT COUNT(*) FROM public.users');
+                                const totalAllTimeClicksResult = await client.query('SELECT (SELECT COUNT(*) FROM public.button_clicks_log) + COALESCE((SELECT SUM(total_clicks) FROM public.lifetime_button_stats), 0) AS total_clicks');
                                 return {
                                     active3d: active3dResult.rows[0].count,
                                     active7d: active7dResult.rows[0].count,
@@ -1881,25 +1882,34 @@ if (state === 'CONTACTING_ADMIN') {
                                     totalButtons: totalButtonsResult.rows[0].count,
                                     totalMessages: totalMessagesResult.rows[0].count,
                                     totalUsers: totalUsersResult.rows[0].count,
+                                    totalAllTimeClicks: totalAllTimeClicksResult.rows[0].total_clicks || 0
                                 };
                             } finally { client.release(); }
                         })(),
                         processAndFormatTopButtons('daily'),
-                        processAndFormatTopButtons('all_time')
+                        processAndFormatTopButtons('all_time'),
+                        client.query("SELECT COUNT(*) FROM public.button_clicks_log WHERE (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date")
                     ]);
-                    const { active3d, active7d, inactive3d, inactive7d, totalButtons, totalMessages, totalUsers } = generalStatsData;
+                    
+                    const { active3d, active7d, inactive3d, inactive7d, totalButtons, totalMessages, totalUsers, totalAllTimeClicks } = generalStatsData;
+                    const dailyTotalClicks = dailyTotalClicksResult.rows[0].count;
+
                     const generalStats = `*📊 الإحصائيات العامة:*\n\n` +
-                                         `👥 إجمالي المستخدمين: \`${totalUsers}\`\n` +
-                                         `📈 النشطون (آخر 3 أيام): \`${active3d}\`\n` +
-                                         `🗓️ النشطون (آخر 7 أيام): \`${active7d}\`\n\n` +
-                                         `🔘 الأزرار: \`${totalButtons}\`\n` +
-                                         `✉️ الرسائل: \`${totalMessages}\``;
+                                         `👥 إجمالي المستخدمين: \`${totalUsers}\`\n\n` +
+                                         `*👤 المستخدمون النشطون:*\n` +
+                                         `- آخر 3 أيام: \`${active3d}\`\n` +
+                                         `- آخر 7 أيام: \`${active7d}\`\n\n` +
+                                         `*🚫 المستخدمون غير النشطين:*\n` +
+                                         `- أكثر من 3 أيام: \`${inactive3d}\`\n` +
+                                         `- أكثر من 7 أيام: \`${inactive7d}\`\n\n` +
+                                         `*🗂 محتوى البوت:*\n` +
+                                         `- الأزرار: \`${totalButtons}\`\n` +
+                                         `- الرسائل: \`${totalMessages}\`\n\n` +
+                                         `*🖱️ الضغطات:*\n` +
+                                         `- اليوم: \`${dailyTotalClicks}\`\n` +
+                                         `- الكلية: \`${totalAllTimeClicks}\``;
 
-                    const inactiveUsersReport = `*🚫 المستخدمون غير النشطين:*\n` +
-                                                `- أكثر من 3 أيام: \`${inactive3d}\`\n` +
-                                                `- أكثر من 7 أيام: \`${inactive7d}\``;
-
-                    const finalReport = `${generalStats}\n\n---\n\n${topDaily}\n\n---\n\n${topAllTime}\n\n---\n\n${inactiveUsersReport}`;
+                    const finalReport = `${generalStats}\n\n---\n\n${topDaily}\n\n---\n\n${topAllTime}`;
                     await ctx.reply(finalReport, { parse_mode: 'Markdown' });
                     break;
                 }
@@ -1989,8 +1999,25 @@ if (state === 'CONTACTING_ADMIN') {
                 await ctx.reply(`تم الدخول إلى "${text}"`, Markup.keyboard(await generateKeyboard(userId)).resize());
             } else {
                 await updateUserState(userId, { stateData: { lastClickedButtonId: buttonId } });
-                const inlineKb = [[ Markup.button.callback('✏️', `btn:rename:${buttonId}`), Markup.button.callback('🗑️', `btn:delete:${buttonId}`), Markup.button.callback('📊', `btn:stats:${buttonId}`), Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), Markup.button.callback('◀️', `btn:left:${buttonId}`), Markup.button.callback('🔼', `btn:up:${buttonId}`), Markup.button.callback('🔽', `btn:down:${buttonId}`), Markup.button.callback('▶️', `btn:right:${buttonId}`) ]];
-                await ctx.reply(`خيارات للزر "${text}" (اضغط مرة أخرى للدخول):`, Markup.inlineKeyboard(inlineKb));
+                
+                const buttonStatus = buttonInfo.admin_only ? '🔒 للمشرفين فقط' : '👥 للجميع';
+                const messageText = `تم اختيار الزر: *${text}*\n` +
+                                  `الحالة الحالية: *${buttonStatus}*\n\n` +
+                                  `(اضغط مرة أخرى للدخول إليه وتعديل محتواه)`;
+
+                // ✨ تم إرجاع تصميم الأزرار إلى صف واحد هنا ✨
+                const inlineKb = [[ 
+                    Markup.button.callback('✏️', `btn:rename:${buttonId}`), 
+                    Markup.button.callback('🗑️', `btn:delete:${buttonId}`), 
+                    Markup.button.callback('📊', `btn:stats:${buttonId}`), 
+                    Markup.button.callback('🔒', `btn:adminonly:${buttonId}`), 
+                    Markup.button.callback('◀️', `btn:left:${buttonId}`), 
+                    Markup.button.callback('🔼', `btn:up:${buttonId}`), 
+                    Markup.button.callback('🔽', `btn:down:${buttonId}`), 
+                    Markup.button.callback('▶️', `btn:right:${buttonId}`) 
+                ]];
+                
+                await ctx.replyWithMarkdown(messageText, Markup.inlineKeyboard(inlineKb));
             }
             return;
         }
@@ -2177,30 +2204,37 @@ bot.on('callback_query', async (ctx) => {
                 return;
             }
             if (subAction === 'stats') {
-                // ... (No changes needed in this block)
-                const todayResult = await client.query(`
-                    SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users
-                    FROM public.button_clicks_log
-                    WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
-                `, [buttonId]);
-                const totalClicksResult = await client.query(`
-                    SELECT
-                        (
-                            (SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1) +
-                            (SELECT COALESCE(total_clicks, 0) FROM public.lifetime_button_stats WHERE button_id = $1)
-                        ) AS total;
-                `, [buttonId]);
+                const [todayResult, totalClicksResult, subButtonsResult, messagesResult, buttonTextResult] = await Promise.all([
+                    client.query(`
+                        SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users
+                        FROM public.button_clicks_log
+                        WHERE button_id = $1 AND (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+                    `, [buttonId]),
+                    client.query(`
+                        SELECT ((SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1) + 
+                                COALESCE((SELECT total_clicks FROM public.lifetime_button_stats WHERE button_id = $1), 0)) AS total;
+                    `, [buttonId]),
+                    client.query('SELECT COUNT(*) FROM public.buttons WHERE parent_id = $1', [buttonId]),
+                    client.query('SELECT COUNT(*) FROM public.messages WHERE button_id = $1', [buttonId]),
+                    client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId])
+                ]);
+
                 const dailyClicks = parseInt(todayResult.rows[0].clicks || 0);
                 const dailyUsers = parseInt(todayResult.rows[0].users || 0);
                 const totalClicks = parseInt(totalClicksResult.rows[0].total || 0);
-                const buttonTextResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
+                const subButtonsCount = parseInt(subButtonsResult.rows[0].count || 0);
+                const messagesCount = parseInt(messagesResult.rows[0].count || 0);
                 const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
+
                 const statsMessage = `📊 <b>إحصائيات الزر: ${buttonName}</b>\n\n` +
                     `👆 <b>الضغطات:</b>\n` +
                     `  - اليوم: <code>${dailyClicks}</code>\n` +
                     `  - الكلي: <code>${totalClicks}</code>\n\n` +
-                    `👤 <b>المستخدمون:</b>\n` +
-                    `  - اليوم: <code>${dailyUsers}</code>`;
+                    `👤 <b>المستخدمون (اليوم):</b> <code>${dailyUsers}</code>\n\n` +
+                    `🗂 <b>المحتويات الداخلية:</b>\n` +
+                    `  - الأزرار الفرعية: <code>${subButtonsCount}</code>\n` +
+                    `  - الرسائل: <code>${messagesCount}</code>`;
+                
                 await ctx.answerCbQuery();
                 await ctx.replyWithHTML(statsMessage);
                 return;
