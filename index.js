@@ -727,56 +727,48 @@ bot.command('info', async (ctx) => {
         client.release();
     }
 });
-
 const mainMessageHandler = async (ctx) => {
     const client = await getClient();
     try {
         const userId = String(ctx.from.id);
         const userResult = await client.query('SELECT * FROM public.users WHERE id = $1', [userId]);
         if (userResult.rows.length === 0) return bot.start(ctx);
+
         const { current_path: currentPath, state, is_admin: isAdmin, state_data: stateData, banned } = userResult.rows[0];
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
+
         await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
 
         // =================================================================
-        // |               منطق عرض رسالة التنبيه (مُصحَّح)                  |
+        // |               منطق عرض رسالة التنبيه (النسخة النهائية)             |
         // =================================================================
         try {
             const settingsResult = await client.query('SELECT alert_message, alert_message_set_at, alert_duration_hours FROM public.settings WHERE id = 1');
             const alert = settingsResult.rows[0];
-            const userLastSeen = userResult.rows[0].last_alert_seen_at;
-
             if (alert && Array.isArray(alert.alert_message) && alert.alert_message.length > 0 && alert.alert_message_set_at) {
                 const alertSetAt = new Date(alert.alert_message_set_at);
                 const expiresAt = new Date(alertSetAt.getTime() + alert.alert_duration_hours * 60 * 60 * 1000);
+                const userLastSeen = userResult.rows[0].last_alert_seen_at;
 
                 if (new Date() < expiresAt && (!userLastSeen || new Date(userLastSeen) < alertSetAt)) {
                     const introMessage = await ctx.reply('🔔 **تنبيه هام من الإدارة** 🔔', { parse_mode: 'Markdown' });
                     await ctx.telegram.pinChatMessage(ctx.chat.id, introMessage.message_id).catch(e => console.error("Failed to pin message:", e.message));
-                    
                     await client.query('UPDATE public.users SET pinned_alert_id = $1 WHERE id = $2', [introMessage.message_id, userId]);
 
                     for (const messageObject of alert.alert_message) {
                         if (messageObject.type === 'forward') {
-                            try {
-                                await bot.telegram.forwardMessage(
-                                    ctx.chat.id,
-                                    messageObject.from_chat_id,
-                                    messageObject.message_id
-                                );
-                            } catch (e) {
-                                console.error(`Failed to forward message ID ${messageObject.message_id} from chat ${messageObject.from_chat_id}. Error:`, e.message);
-                            }
+                            await bot.telegram.forwardMessage(ctx.chat.id, messageObject.from_chat_id, messageObject.message_id).catch(e => console.error(`Failed to forward alert message:`, e.message));
                         }
                     }
 
                     await client.query('UPDATE public.users SET last_alert_seen_at = NOW() WHERE id = $1', [userId]);
-                    return; 
+                    return;
                 }
             }
-        } catch (e) { 
-            console.error("Error handling alert message:", e); 
+        } catch (e) {
+            console.error("Error handling alert message:", e);
         }
+
       // ==========================================================
 // |      =============== منطق الأزرار الافتراضية (استقبال الأسماء) يبدأ هنا ===============      |
 // ==========================================================
@@ -1061,8 +1053,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
 // ==========================================================
 // |      ================ الكود المحدث والنهائي ينتهي هنا ===============      |
 // ==========================================================
-      // ... بعد انتهاء منطق DYNAMIC_TRANSFER وقبل if (state === 'AWAITING_BULK_MESSAGES')
-  if (isAdmin && state === 'AWAITING_ALERT_MESSAGES') {
+      if (isAdmin && state === 'AWAITING_ALERT_MESSAGES') {
             const { collectedMessages = [] } = stateData;
             if (ctx.message && ctx.message.text === '✅ إنهاء إضافة رسائل التنبيه') {
                 if (collectedMessages.length === 0) {
@@ -1072,24 +1063,18 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                 await updateUserState(userId, { state: 'AWAITING_ALERT_DURATION', stateData: { alertMessages: collectedMessages } });
                 return ctx.reply(`👍 تم تجميع ${collectedMessages.length} رسالة. الآن أدخل مدة صلاحية التنبيه بالساعات (مثال: 6).`);
             }
-            // استيعاب جميع أنواع الرسائل
-            let messageObject;
-           if (ctx.message) {
-        const messageObject = {
-            type: "forward", // نوع جديد وبسيط
-            from_chat_id: ctx.chat.id, // ID المحادثة التي أُرسلت منها الرسالة (محادثتك مع البوت)
-            message_id: ctx.message.message_id // ID الرسالة نفسها
-        };
-        
-        const updatedMessages = [...collectedMessages, messageObject];
-        await updateUserState(userId, { stateData: { collectedMessages: updatedMessages } });
-        return ctx.reply(`📥 تم حفظ الرسالة (${updatedMessages.length}) لإعادة توجيهها. أرسل المزيد أو اضغط "إنهاء".`);
-    }
+            if (ctx.message) {
+                const messageObject = { type: "forward", from_chat_id: ctx.chat.id, message_id: ctx.message.message_id };
+                const updatedMessages = [...collectedMessages, messageObject];
+                await updateUserState(userId, { stateData: { collectedMessages: updatedMessages } });
+                return ctx.reply(`📥 تم حفظ الرسالة (${updatedMessages.length}) لإعادة توجيهها. أرسل المزيد أو اضغط "إنهاء".`);
+            }
+            return; // Exit after handling
+        }
 
         if (isAdmin && state === 'AWAITING_ALERT_DURATION') {
             const duration = parseInt(ctx.message.text);
             if (isNaN(duration) || duration <= 0) return ctx.reply('⚠️ يرجى إدخال رقم صحيح أكبر من صفر.');
-            
             const { alertMessages } = stateData;
             await client.query(
                 `INSERT INTO public.settings (id, alert_message, alert_message_set_at, alert_duration_hours) VALUES (1, $1, NOW(), $2) ON CONFLICT (id) DO UPDATE SET alert_message = EXCLUDED.alert_message, alert_message_set_at = EXCLUDED.alert_message_set_at, alert_duration_hours = EXCLUDED.alert_duration_hours`,
