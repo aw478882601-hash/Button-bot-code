@@ -761,44 +761,19 @@ await client.query('UPDATE public.users SET pinned_alert_id = $1 WHERE id = $2',
                    // ...
 // إرسال باقي رسائل التنبيه بالترتيب
 for (const messageObject of alert.alert_message) {
-    switch(messageObject.type) {
-        case 'text':
-            // تم حذف parse_mode من هنا
-            await ctx.reply(messageObject.content, { entities: messageObject.entities });
-            break;
-        case 'photo':
-            // تم حذف parse_mode من هنا
-            await ctx.replyWithPhoto(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities });
-            break;
-        case 'document':
-            // تم حذف parse_mode من هنا
-            await ctx.replyWithDocument(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities });
-            break;
-        case 'video':
-            // تم حذف parse_mode من هنا
-            await ctx.replyWithVideo(messageObject.content, { caption: messageObject.caption, caption_entities: messageObject.entities });
-            break;
-        case 'poll':
-            const pollOptions = {
-                is_anonymous: messageObject.is_anonymous,
-                allows_multiple_answers: messageObject.allows_multiple_answers,
-                // إذا كان اختباراً، أضف الخيارات الخاصة به
-                ...(messageObject.is_quiz && {
-                    type: 'quiz',
-                    correct_option_id: messageObject.correct_option_id,
-                    explanation: messageObject.explanation,
-                    explanation_entities: messageObject.explanation_entities
-                })
-            };
-            await ctx.replyWithPoll(
-                messageObject.question,
-                messageObject.options,
-                pollOptions
+    // ** ✨ التعديل الجذري يبدأ هنا ✨ **
+    // سنستخدم دالة إعادة التوجيه لضمان إرسال نفس الرسالة الأصلية للجميع
+    if (messageObject.type === 'forward') {
+        try {
+            await bot.telegram.forwardMessage(
+                ctx.chat.id, // إرسال إلى المستخدم الحالي
+                messageObject.from_chat_id, // من محادثة الأدمن الأصلية
+                messageObject.message_id // الرسالة المحددة التي أرسلها الأدمن
             );
-            break;
+        } catch (e) {
+            console.error(`Failed to forward message ID ${messageObject.message_id} from chat ${messageObject.from_chat_id}. Error:`, e.message);
+        }
     }
-}
-//...
                     await client.query('UPDATE public.users SET last_alert_seen_at = NOW() WHERE id = $1', [userId]);
                   return; 
                 }
@@ -1107,30 +1082,17 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             }
             // استيعاب جميع أنواع الرسائل
             let messageObject;
-            if (ctx.message.text) { messageObject = { type: "text", content: ctx.message.text, caption: '', entities: ctx.message.entities || [] }; }
-            else if (ctx.message.photo) { messageObject = { type: "photo", content: ctx.message.photo.pop().file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] }; }
-            else if (ctx.message.document) { messageObject = { type: "document", content: ctx.message.document.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] }; }
-            else if (ctx.message.video) { messageObject = { type: "video", content: ctx.message.video.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] }; }
-              else if (ctx.message.poll) {
-        const poll = ctx.message.poll;
-        messageObject = {
-            type: "poll",
-            question: poll.question,
-            options: poll.options.map(o => o.text), // نستخرج نصوص الخيارات فقط
-            is_quiz: poll.type === 'quiz', // لتحديد ما إذا كان اختباراً
-            correct_option_id: poll.correct_option_id,
-            explanation: poll.explanation,
-            explanation_entities: poll.explanation_entities,
-            allows_multiple_answers: poll.allows_multiple_answers,
-            is_anonymous: poll.is_anonymous
+           if (ctx.message) {
+        const messageObject = {
+            type: "forward", // نوع جديد وبسيط
+            from_chat_id: ctx.chat.id, // ID المحادثة التي أُرسلت منها الرسالة (محادثتك مع البوت)
+            message_id: ctx.message.message_id // ID الرسالة نفسها
         };
+        
+        const updatedMessages = [...collectedMessages, messageObject];
+        await updateUserState(userId, { stateData: { collectedMessages: updatedMessages } });
+        return ctx.reply(`📥 تم حفظ الرسالة (${updatedMessages.length}) لإعادة توجيهها. أرسل المزيد أو اضغط "إنهاء".`);
     }
-            else { return ctx.reply("⚠️ نوع الرسالة غير مدعوم حاليًا."); }
-            
-            const updatedMessages = [...collectedMessages, messageObject];
-            await updateUserState(userId, { stateData: { collectedMessages: updatedMessages } });
-            return ctx.reply(`📥 تم إضافة الرسالة (${updatedMessages.length}). أرسل المزيد أو اضغط "إنهاء".`);
-        }
 
         if (isAdmin && state === 'AWAITING_ALERT_DURATION') {
             const duration = parseInt(ctx.message.text);
@@ -1591,7 +1553,10 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
     return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '💬 التواصل مع الأدمن':
                 await updateUserState(userId, { state: 'CONTACTING_ADMIN' });
-                return ctx.reply('أرسل رسالتك الآن (نص، صورة، ملف...)... او يمكنك التواصل بشكل مباشر هنا @aw478260');
+                return ctx.reply(
+                    'أرسل رسالتك الآن (نص، صورة، ملف...)... او يمكنك التواصل بشكل مباشر هنا @aw478260',
+                    Markup.keyboard(await generateKeyboard(userId)).resize()
+                );
             case '👑 الإشراف':
                 if (isAdmin && currentPath === 'root') {
                     await updateUserState(userId, { currentPath: 'supervision', stateData: {} });
