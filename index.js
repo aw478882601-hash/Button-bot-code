@@ -1946,9 +1946,13 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
  } catch (error) {
         console.error("FATAL ERROR in mainMessageHandler:", error);
         console.error("Caused by update:", JSON.stringify(ctx.update, null, 2));
-        await ctx.reply("حدث خطأ فادح. تم إبلاغ المطور.");
+        if (ctx) {
+            await ctx.reply("حدث خطأ فادح. تم إبلاغ المطور.").catch(e => console.error("Failed to send error message to user:", e));
+        }
     } finally { 
-        client.release(); 
+        if (client) {
+            client.release(); 
+        }
     }
 };
 
