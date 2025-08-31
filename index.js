@@ -1862,10 +1862,11 @@ if (state === 'CONTACTING_ADMIN') {
             let supervisionCommandHandled = true;
             switch (text) {
                 case '📊 الإحصائيات': {
-                    const [ generalStatsData, topDaily, topAllTime, dailyTotalClicksResult ] = await Promise.all([
+                    const [ generalStatsData, topDaily, topAllTime ] = await Promise.all([
                         (async () => {
                             const client = await getClient();
                             try {
+                                const dailyActiveUsersResult = await client.query("SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date");
                                 const active3dResult = await client.query("SELECT COUNT(DISTINCT id) FROM public.users WHERE last_active > NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '3 DAY'");
                                 const active7dResult = await client.query("SELECT COUNT(DISTINCT id) FROM public.users WHERE last_active > NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '7 DAY'");
                                 const inactive3dResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '3 DAY'");
@@ -1873,8 +1874,11 @@ if (state === 'CONTACTING_ADMIN') {
                                 const totalButtonsResult = await client.query('SELECT COUNT(*) FROM public.buttons');
                                 const totalMessagesResult = await client.query('SELECT COUNT(*) FROM public.messages');
                                 const totalUsersResult = await client.query('SELECT COUNT(*) FROM public.users');
+                                const dailyTotalClicksResult = await client.query("SELECT COUNT(*) FROM public.button_clicks_log WHERE (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date");
                                 const totalAllTimeClicksResult = await client.query('SELECT (SELECT COUNT(*) FROM public.button_clicks_log) + COALESCE((SELECT SUM(total_clicks) FROM public.lifetime_button_stats), 0) AS total_clicks');
+                                
                                 return {
+                                    dailyActiveUsers: dailyActiveUsersResult.rows[0].count || 0,
                                     active3d: active3dResult.rows[0].count,
                                     active7d: active7dResult.rows[0].count,
                                     inactive3d: inactive3dResult.rows[0].count,
@@ -1882,21 +1886,21 @@ if (state === 'CONTACTING_ADMIN') {
                                     totalButtons: totalButtonsResult.rows[0].count,
                                     totalMessages: totalMessagesResult.rows[0].count,
                                     totalUsers: totalUsersResult.rows[0].count,
+                                    dailyTotalClicks: dailyTotalClicksResult.rows[0].count || 0,
                                     totalAllTimeClicks: totalAllTimeClicksResult.rows[0].total_clicks || 0
                                 };
                             } finally { client.release(); }
                         })(),
                         processAndFormatTopButtons('daily'),
-                        processAndFormatTopButtons('all_time'),
-                        client.query("SELECT COUNT(*) FROM public.button_clicks_log WHERE (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date")
+                        processAndFormatTopButtons('all_time')
                     ]);
                     
-                    const { active3d, active7d, inactive3d, inactive7d, totalButtons, totalMessages, totalUsers, totalAllTimeClicks } = generalStatsData;
-                    const dailyTotalClicks = dailyTotalClicksResult.rows[0].count;
+                    const { dailyActiveUsers, active3d, active7d, inactive3d, inactive7d, totalButtons, totalMessages, totalUsers, dailyTotalClicks, totalAllTimeClicks } = generalStatsData;
 
                     const generalStats = `*📊 الإحصائيات العامة:*\n\n` +
                                          `👥 إجمالي المستخدمين: \`${totalUsers}\`\n\n` +
                                          `*👤 المستخدمون النشطون:*\n` +
+                                         `- اليوم (تفاعلوا): \`${dailyActiveUsers}\`\n` +
                                          `- آخر 3 أيام: \`${active3d}\`\n` +
                                          `- آخر 7 أيام: \`${active7d}\`\n\n` +
                                          `*🚫 المستخدمون غير النشطين:*\n` +
@@ -2204,7 +2208,20 @@ bot.on('callback_query', async (ctx) => {
                 return;
             }
             if (subAction === 'stats') {
-                const [todayResult, totalClicksResult, subButtonsResult, messagesResult, buttonTextResult] = await Promise.all([
+                // استعلام متقدم (Recursive CTE) لجلب كل الفروع
+                const deepStatsQuery = `
+                    WITH RECURSIVE descendant_buttons AS (
+                        SELECT id FROM public.buttons WHERE id = $1
+                        UNION ALL
+                        SELECT b.id FROM public.buttons b
+                        INNER JOIN descendant_buttons db ON b.parent_id = db.id
+                    )
+                    SELECT
+                        (SELECT COUNT(*) FROM descendant_buttons WHERE id != $1) AS deep_sub_button_count,
+                        (SELECT COUNT(*) FROM public.messages WHERE button_id IN (SELECT id FROM descendant_buttons)) AS deep_message_count;
+                `;
+
+                const [todayResult, totalClicksResult, deepStatsResult, buttonTextResult] = await Promise.all([
                     client.query(`
                         SELECT COUNT(*) as clicks, COUNT(DISTINCT user_id) as users
                         FROM public.button_clicks_log
@@ -2214,26 +2231,25 @@ bot.on('callback_query', async (ctx) => {
                         SELECT ((SELECT COUNT(*) FROM public.button_clicks_log WHERE button_id = $1) + 
                                 COALESCE((SELECT total_clicks FROM public.lifetime_button_stats WHERE button_id = $1), 0)) AS total;
                     `, [buttonId]),
-                    client.query('SELECT COUNT(*) FROM public.buttons WHERE parent_id = $1', [buttonId]),
-                    client.query('SELECT COUNT(*) FROM public.messages WHERE button_id = $1', [buttonId]),
+                    client.query(deepStatsQuery, [buttonId]),
                     client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId])
                 ]);
 
                 const dailyClicks = parseInt(todayResult.rows[0].clicks || 0);
                 const dailyUsers = parseInt(todayResult.rows[0].users || 0);
                 const totalClicks = parseInt(totalClicksResult.rows[0].total || 0);
-                const subButtonsCount = parseInt(subButtonsResult.rows[0].count || 0);
-                const messagesCount = parseInt(messagesResult.rows[0].count || 0);
+                const deepSubButtonsCount = parseInt(deepStatsResult.rows[0].deep_sub_button_count || 0);
+                const deepMessagesCount = parseInt(deepStatsResult.rows[0].deep_message_count || 0);
                 const buttonName = buttonTextResult.rows[0]?.text || 'غير معروف';
 
                 const statsMessage = `📊 <b>إحصائيات الزر: ${buttonName}</b>\n\n` +
-                    `👆 <b>الضغطات:</b>\n` +
+                    `👆 <b>الضغطات (على هذا الزر فقط):</b>\n` +
                     `  - اليوم: <code>${dailyClicks}</code>\n` +
                     `  - الكلي: <code>${totalClicks}</code>\n\n` +
                     `👤 <b>المستخدمون (اليوم):</b> <code>${dailyUsers}</code>\n\n` +
-                    `🗂 <b>المحتويات الداخلية:</b>\n` +
-                    `  - الأزرار الفرعية: <code>${subButtonsCount}</code>\n` +
-                    `  - الرسائل: <code>${messagesCount}</code>`;
+                    `🗂 <b>المحتويات الداخلية (بشكل عميق):</b>\n` +
+                    `  - إجمالي الأزرار الفرعية: <code>${deepSubButtonsCount}</code>\n` +
+                    `  - إجمالي الرسائل بالداخل: <code>${deepMessagesCount}</code>`;
                 
                 await ctx.answerCbQuery();
                 await ctx.replyWithHTML(statsMessage);
