@@ -1054,8 +1054,9 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
 // |      ================ الكود المحدث والنهائي ينتهي هنا ===============      |
 // ==========================================================
       if (isAdmin && state === 'AWAITING_ALERT_MESSAGES') {
-            const { collectedMessages = [] } = stateData;
+            // أولاً، تحقق دائمًا من أمر الإنهاء
             if (ctx.message && ctx.message.text === '✅ إنهاء إضافة رسائل التنبيه') {
+                const { collectedMessages = [] } = stateData;
                 if (collectedMessages.length === 0) {
                     await updateUserState(userId, { state: 'NORMAL', stateData: {} });
                     return ctx.reply('تم إلغاء العملية لعدم إضافة رسائل.', Markup.keyboard(await generateKeyboard(userId)).resize());
@@ -1063,13 +1064,48 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                 await updateUserState(userId, { state: 'AWAITING_ALERT_DURATION', stateData: { alertMessages: collectedMessages } });
                 return ctx.reply(`👍 تم تجميع ${collectedMessages.length} رسالة. الآن أدخل مدة صلاحية التنبيه بالساعات (مثال: 6).`);
             }
+
+            // ✨ المنطق الجديد والمؤتمت يبدأ هنا ✨
+            // ثانيًا، إذا كانت الرسالة استطلاعًا مباشرًا
+            if (ctx.message && ctx.message.poll && !ctx.message.forward_from && !ctx.message.forward_from_chat) {
+                try {
+                    // 1. قم بإنشاء نسخة من الاستطلاع والتقط تفاصيلها
+                    const copiedMessage = await ctx.copyMessage(ctx.chat.id);
+
+                    // 2. قم بحفظ تفاصيل "النسخة الجديدة" التي أنشأها البوت
+                    const { collectedMessages = [] } = stateData;
+                    const messageObject = {
+                        is_poll: true,
+                        from_chat_id: copiedMessage.chat.id, // هو نفسه chat.id الخاص بك
+                        message_id: copiedMessage.message_id // ✨ أهم خطوة: نستخدم ID النسخة الجديدة
+                    };
+                    const updatedMessages = [...collectedMessages, messageObject];
+                    await updateUserState(userId, { stateData: { collectedMessages: updatedMessages } });
+                    
+                    // 3. أرسل رسالة تأكيد للأدمن
+                    await ctx.reply(`✅ تم اعتماد نسخة الاستطلاع التي أنشأها البوت (${updatedMessages.length}). أرسل المزيد أو اضغط "إنهاء".`);
+                
+                } catch(e) {
+                    console.error("Failed to auto-copy and save poll:", e);
+                    await ctx.reply('حدث خطأ أثناء معالجة الاستطلاع.');
+                }
+                return; // انتظر رسائل أخرى أو أمر الإنهاء
+            }
+
+            // ثالثًا، إذا كانت الرسالة أي شيء آخر (رسالة نصية، صورة، ملف، رسالة موجهة)
             if (ctx.message) {
-                const messageObject = { type: "forward", from_chat_id: ctx.chat.id, message_id: ctx.message.message_id };
+                const { collectedMessages = [] } = stateData;
+                const messageObject = {
+                    is_poll: false, // بالتأكيد ليست استطلاعًا مباشرًا
+                    from_chat_id: ctx.chat.id,
+                    message_id: ctx.message.message_id
+                };
                 const updatedMessages = [...collectedMessages, messageObject];
                 await updateUserState(userId, { stateData: { collectedMessages: updatedMessages } });
-                return ctx.reply(`📥 تم حفظ الرسالة (${updatedMessages.length}) لإعادة توجيهها. أرسل المزيد أو اضغط "إنهاء".`);
+                await ctx.reply(`📥 تم حفظ الرسالة (${updatedMessages.length}). أرسل المزيد أو اضغط "إنهاء".`);
+                return;
             }
-            return; // Exit after handling
+            return;
         }
 
         if (isAdmin && state === 'AWAITING_ALERT_DURATION') {
