@@ -1949,11 +1949,13 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             await ctx.reply('لم يتم إضافة محتوى إلى هذا القسم بعد.');
         }
         
-    } catch (error) {
+ } catch (error) {
         console.error("FATAL ERROR in mainMessageHandler:", error);
         console.error("Caused by update:", JSON.stringify(ctx.update, null, 2));
         await ctx.reply("حدث خطأ فادح. تم إبلاغ المطور.");
-    } finally { client.release(); }
+    } finally { 
+        client.release(); 
+    }
 };
 
 bot.on('message', mainMessageHandler);
