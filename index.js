@@ -1621,11 +1621,12 @@ if (state === 'CONTACTING_ADMIN') {
     await updateUserState(userId, { currentPath: newPath });
     return ctx.reply('تم الرجوع.', Markup.keyboard(await generateKeyboard(userId)).resize());
             case '💬 التواصل مع الأدمن':
-                await updateUserState(userId, { state: 'CONTACTING_ADMIN' });
-                return ctx.reply(
-                    'أرسل رسالتك الآن (نص، صورة، ملف...)... او يمكنك التواصل بشكل مباشر هنا @aw478260',
-                    Markup.keyboard(await generateKeyboard(userId)).resize()
-                );
+        await updateUserState(userId, { state: 'AWAITING_BATCH_NUMBER', stateData: {} });
+        await ctx.reply(
+            'أدخل رقم الدفعة الخاص بك',
+            Markup.keyboard(await generateKeyboard(userId)).resize()
+        );
+        return;
             case '👑 الإشراف':
                 if (isAdmin && currentPath === 'root') {
                     await updateUserState(userId, { currentPath: 'supervision', stateData: {} });
