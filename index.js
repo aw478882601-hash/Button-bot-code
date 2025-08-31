@@ -727,7 +727,6 @@ bot.command('info', async (ctx) => {
         client.release();
     }
 });
-
 const mainMessageHandler = async (ctx) => {
     const client = await getClient();
     try {
@@ -737,12 +736,11 @@ const mainMessageHandler = async (ctx) => {
         const { current_path: currentPath, state, is_admin: isAdmin, state_data: stateData, banned } = userResult.rows[0];
         if (banned) return ctx.reply('🚫 أنت محظور من استخدام هذا البوت.');
         await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
-      // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
-      // ... بداية دالة mainMessageHandler بعد await client.query('UPDATE public.users ...');
-      // =================================================================
-// |      =============== منطق عرض رسالة التنبيه (مُحسَّن) يبدأ هنا ===============      |
-// =================================================================
-try {
+
+        // =================================================================
+        // |      =============== منطق عرض رسالة التنبيه (مُصحَّح) يبدأ هنا ===============      |
+        // =================================================================
+        try {
             const settingsResult = await client.query('SELECT alert_message, alert_message_set_at, alert_duration_hours FROM public.settings WHERE id = 1');
             const alert = settingsResult.rows[0];
             const userLastSeen = userResult.rows[0].last_alert_seen_at;
@@ -752,33 +750,33 @@ try {
                 const expiresAt = new Date(alertSetAt.getTime() + alert.alert_duration_hours * 60 * 60 * 1000);
 
                 if (new Date() < expiresAt && (!userLastSeen || new Date(userLastSeen) < alertSetAt)) {
-                    // **جديد**: إرسال وتثبيت الرسالة التمهيدية
                     const introMessage = await ctx.reply('🔔 **تنبيه هام من الإدارة** 🔔', { parse_mode: 'Markdown' });
                     await ctx.telegram.pinChatMessage(ctx.chat.id, introMessage.message_id).catch(e => console.error("Failed to pin message:", e.message));
                     
-await client.query('UPDATE public.users SET pinned_alert_id = $1 WHERE id = $2', [introMessage.message_id, userId]);
-                    // إرسال باقي رسائل التنبيه بالترتيب
-                   // ...
-// إرسال باقي رسائل التنبيه بالترتيب
-for (const messageObject of alert.alert_message) {
-    // ** ✨ التعديل الجذري يبدأ هنا ✨ **
-    // سنستخدم دالة إعادة التوجيه لضمان إرسال نفس الرسالة الأصلية للجميع
-    if (messageObject.type === 'forward') {
-        try {
-            await bot.telegram.forwardMessage(
-                ctx.chat.id, // إرسال إلى المستخدم الحالي
-                messageObject.from_chat_id, // من محادثة الأدمن الأصلية
-                messageObject.message_id // الرسالة المحددة التي أرسلها الأدمن
-            );
-        } catch (e) {
-            console.error(`Failed to forward message ID ${messageObject.message_id} from chat ${messageObject.from_chat_id}. Error:`, e.message);
-        }
-    }
+                    await client.query('UPDATE public.users SET pinned_alert_id = $1 WHERE id = $2', [introMessage.message_id, userId]);
+
+                    for (const messageObject of alert.alert_message) {
+                        if (messageObject.type === 'forward') {
+                            try {
+                                await bot.telegram.forwardMessage(
+                                    ctx.chat.id,
+                                    messageObject.from_chat_id,
+                                    messageObject.message_id
+                                );
+                            } catch (e) {
+                                console.error(`Failed to forward message ID ${messageObject.message_id} from chat ${messageObject.from_chat_id}. Error:`, e.message);
+                            }
+                        }
+                    } // ✨ تم نقل قوس الإغلاق الخاص بـ for إلى هنا
+
+                    // ✨ هذان السطران أصبحا الآن خارج حلقة التكرار (وهذا هو الصواب)
                     await client.query('UPDATE public.users SET last_alert_seen_at = NOW() WHERE id = $1', [userId]);
-                  return; 
+                    return; 
                 }
             }
-        } catch (e) { console.error("Error handling alert message:", e); }
+        } catch (e) { 
+            console.error("Error handling alert message:", e); 
+        }
 // =================================================================
 // |      ================ منطق عرض رسالة التنبيه ينتهي هنا ===============      |
 // =================================================================
