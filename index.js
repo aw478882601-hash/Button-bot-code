@@ -755,9 +755,23 @@ const mainMessageHandler = async (ctx) => {
                     await ctx.telegram.pinChatMessage(ctx.chat.id, introMessage.message_id).catch(e => console.error("Failed to pin message:", e.message));
                     await client.query('UPDATE public.users SET pinned_alert_id = $1 WHERE id = $2', [introMessage.message_id, userId]);
 
+                    // استبدل حلقة for القديمة بهذه
                     for (const messageObject of alert.alert_message) {
-                        if (messageObject.type === 'forward') {
-                            await bot.telegram.forwardMessage(ctx.chat.id, messageObject.from_chat_id, messageObject.message_id).catch(e => console.error(`Failed to forward alert message:`, e.message));
+                        // نتحقق إذا كانت الرسالة استطلاعاً أم لا
+                        if (messageObject.is_poll) {
+                            // للاستطلاعات: يجب استخدام forward لجمع النتائج
+                            await bot.telegram.forwardMessage(
+                                ctx.chat.id,
+                                messageObject.from_chat_id,
+                                messageObject.message_id
+                            ).catch(e => console.error(`Failed to FORWARD poll alert:`, e.message));
+                        } else {
+                            // لباقي الرسائل: نستخدم copy لإخفاء اسم المرسل
+                            await bot.telegram.copyMessage(
+                                ctx.chat.id,
+                                messageObject.from_chat_id,
+                                messageObject.message_id
+                            ).catch(e => console.error(`Failed to COPY alert message:`, e.message));
                         }
                     }
 
