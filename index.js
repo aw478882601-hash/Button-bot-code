@@ -310,9 +310,10 @@ async function generateKeyboard(userId) {
     let keyboardRows = [];
 
     // --- لوحات المفاتيح الخاصة بالحالات ---
-    if (state === 'CONTACTING_ADMIN') {
+    if (state === 'AWAITING_BATCH_NUMBER' || state === 'CONTACTING_ADMIN') {
         return [['❌ إلغاء العملية']];
     }
+  
     if (state === 'AWAITING_ALERT_MESSAGES') {
         return [['✅ إنهاء إضافة رسائل التنبيه']];
     }
@@ -1513,31 +1514,74 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
         }
         
         // هذا المقطع للرسالة الأولى فقط (يرسلها للجميع)
-        if (state === 'CONTACTING_ADMIN') {
-          if (ctx.message && ctx.message.text === '❌ إلغاء العملية') {
-                await updateUserState(userId, { state: 'NORMAL', stateData: {} });
-                await ctx.reply('👍 تم إلغاء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
-                return;
-            }
-            const adminsResult = await client.query('SELECT id FROM public.users WHERE is_admin = true');
-            const adminIds = adminsResult.rows.map(row => String(row.id));
-            if (adminIds.length === 0) {
-                await updateUserState(userId, { state: 'NORMAL' });
-                return ctx.reply('⚠️ عذراً، لا يوجد مشرفون متاحون حالياً لتلقي رسالتك.');
-            }
-            const from = ctx.from;
-            const userDetails = `👤 <b>رسالة جديدة من مستخدم!</b>\n\n<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}` + `\n<b>المعرف:</b> @${from.username || 'لا يوجد'}` + `\n<b>ID:</b> <code>${from.id}</code>`;
-            for (const adminId of adminIds) {
-                try {
-                    const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ رد', `admin:reply:${from.id}`), Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`) ]] };
-                    await bot.telegram.sendMessage(adminId, userDetails, { parse_mode: 'HTML', reply_markup: replyMarkup });
-                    await ctx.copyMessage(adminId);
-                } catch (e) { console.error(`Failed to send message to admin ${adminId}:`, e); }
-            }
-            await updateUserState(userId, { state: 'NORMAL' });
-            await ctx.reply('✅ تم إرسال رسالتك إلى الأدمن بنجاح.');
-            return;
+        if (state === 'AWAITING_BATCH_NUMBER') {
+    if (ctx.message && ctx.message.text === '❌ إلغاء العملية') {
+        await updateUserState(userId, { state: 'NORMAL', stateData: {} });
+        return ctx.reply('👍 تم إلغاء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
+    }
+
+    if (!ctx.message || !ctx.message.text) {
+        return ctx.reply('⚠️ يرجى إدخال رد نصي.');
+    }
+
+    const batchText = ctx.message.text;
+    // تحويل الأرقام العربية إلى الإنجليزية للتحقق
+    const englishBatchText = batchText.replace(/[\u0660-\u0669]/g, c => c.charCodeAt(0) - 0x0660);
+
+    if (!/^\d+$/.test(englishBatchText)) {
+        return ctx.reply('⚠️ يرجى إدخال أرقام فقط. ما هو رقم دفعتك؟');
+    }
+    
+    // حفظ رقم الدفعة والانتقال للخطوة التالية
+    await updateUserState(userId, { 
+        state: 'CONTACTING_ADMIN', 
+        stateData: { batchNumber: englishBatchText } 
+    });
+    
+    return ctx.reply(
+        '✅ تم حفظ رقم الدفعة. أرسل الآن رسالتك ليتم توصيلها إلى الإدارة.',
+        Markup.keyboard(await generateKeyboard(userId)).resize()
+    );
+}
+
+// الخطوة 3: استقبال الرسالة وإرسالها للأدمن
+if (state === 'CONTACTING_ADMIN') {
+    if (ctx.message && ctx.message.text === '❌ إلغاء العملية') {
+        await updateUserState(userId, { state: 'NORMAL', stateData: {} });
+        return ctx.reply('👍 تم إلغاء العملية.', Markup.keyboard(await generateKeyboard(userId)).resize());
+    }
+    
+    const adminsResult = await client.query('SELECT id FROM public.users WHERE is_admin = true');
+    const adminIds = adminsResult.rows.map(row => String(row.id));
+    if (adminIds.length > 0) {
+        const from = ctx.from;
+        // جلب رقم الدفعة من البيانات المحفوظة
+        const batchNumber = stateData.batchNumber || 'غير محدد';
+        // تحديث الرسالة التعريفية لتشمل رقم الدفعة
+        const userDetails = `👤 <b>رسالة جديدة من مستخدم!</b>\n\n` +
+                          `<b>الدفعة:</b> <code>${batchNumber}</code>\n` +
+                          `<b>الاسم:</b> ${from.first_name}${from.last_name ? ' ' + from.last_name : ''}\n` +
+                          `<b>المعرف:</b> @${from.username || 'لا يوجد'}\n` +
+                          `<b>ID:</b> <code>${from.id}</code>`;
+
+        for (const adminId of adminIds) {
+            try {
+                const replyMarkup = { inline_keyboard: [[ Markup.button.callback('✍️ رد', `admin:reply:${from.id}`), Markup.button.callback('🚫 حظر', `admin:ban:${from.id}`) ]] };
+                await bot.telegram.sendMessage(adminId, userDetails, { parse_mode: 'HTML', reply_markup: replyMarkup });
+                await ctx.copyMessage(adminId);
+            } catch (e) { console.error(`Failed to send message to admin ${adminId}:`, e); }
         }
+    }
+    
+    await updateUserState(userId, { state: 'NORMAL', stateData: {} });
+    
+    // إصلاح المشكلة: تحديث لوحة المفاتيح بعد الإرسال
+    await ctx.reply(
+        '✅ تم إرسال رسالتك إلى الأدمن بنجاح.',
+        Markup.keyboard(await generateKeyboard(userId)).resize()
+    );
+    return;
+}
 
         // هذا المقطع الجديد لرد المستخدم على أدمن محدد
         if (state === 'REPLYING_TO_ADMIN') {
