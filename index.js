@@ -727,6 +727,7 @@ bot.command('info', async (ctx) => {
         client.release();
     }
 });
+
 const mainMessageHandler = async (ctx) => {
     const client = await getClient();
     try {
@@ -738,7 +739,7 @@ const mainMessageHandler = async (ctx) => {
         await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
 
         // =================================================================
-        // |      =============== منطق عرض رسالة التنبيه (مُصحَّح) يبدأ هنا ===============      |
+        // |               منطق عرض رسالة التنبيه (مُصحَّح)                  |
         // =================================================================
         try {
             const settingsResult = await client.query('SELECT alert_message, alert_message_set_at, alert_duration_hours FROM public.settings WHERE id = 1');
@@ -767,9 +768,8 @@ const mainMessageHandler = async (ctx) => {
                                 console.error(`Failed to forward message ID ${messageObject.message_id} from chat ${messageObject.from_chat_id}. Error:`, e.message);
                             }
                         }
-                    } // ✨ تم نقل قوس الإغلاق الخاص بـ for إلى هنا
+                    }
 
-                    // ✨ هذان السطران أصبحا الآن خارج حلقة التكرار (وهذا هو الصواب)
                     await client.query('UPDATE public.users SET last_alert_seen_at = NOW() WHERE id = $1', [userId]);
                     return; 
                 }
@@ -777,12 +777,6 @@ const mainMessageHandler = async (ctx) => {
         } catch (e) { 
             console.error("Error handling alert message:", e); 
         }
-// =================================================================
-// |      ================ منطق عرض رسالة التنبيه ينتهي هنا ===============      |
-// =================================================================
-// ==========================================================
-// |      =============== منطق اختيار الأزرار (للنقل والنسخ) يبدأ هنا ===============      |
-// ==========================================================
       // ==========================================================
 // |      =============== منطق الأزرار الافتراضية (استقبال الأسماء) يبدأ هنا ===============      |
 // ==========================================================
