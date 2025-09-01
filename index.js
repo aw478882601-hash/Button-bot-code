@@ -1893,62 +1893,62 @@ if (state === 'CONTACTING_ADMIN') {
             let supervisionCommandHandled = true;
             switch (text) {
                 case '📊 الإحصائيات': {
-                    const [ generalStatsData, topDaily, topAllTime ] = await Promise.all([
-                        (async () => {
-                            const client = await getClient();
-                            try {
-                                const dailyActiveUsersResult = await client.query("SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date");
-                                const active3dResult = await client.query("SELECT COUNT(DISTINCT id) FROM public.users WHERE last_active > NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '3 DAY'");
-                                const active7dResult = await client.query("SELECT COUNT(DISTINCT id) FROM public.users WHERE last_active > NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '7 DAY'");
-                                const inactive3dResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '3 DAY'");
-                                const inactive7dResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '7 DAY'");
-                                const totalButtonsResult = await client.query('SELECT COUNT(*) FROM public.buttons');
-                                const totalMessagesResult = await client.query('SELECT COUNT(*) FROM public.messages');
-                                const totalUsersResult = await client.query('SELECT COUNT(*) FROM public.users');
-                                const dailyTotalClicksResult = await client.query("SELECT COUNT(*) FROM public.button_clicks_log WHERE (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date");
-                                const totalAllTimeClicksResult = await client.query('SELECT (SELECT COUNT(*) FROM public.button_clicks_log) + COALESCE((SELECT SUM(total_clicks) FROM public.lifetime_button_stats), 0) AS total_clicks');
-                                
-                                return {
-                                    dailyActiveUsers: dailyActiveUsersResult.rows[0].count || 0,
-                                    active3d: active3dResult.rows[0].count,
-                                    active7d: active7dResult.rows[0].count,
-                                    inactive3d: inactive3dResult.rows[0].count,
-                                    inactive7d: inactive7dResult.rows[0].count,
-                                    totalButtons: totalButtonsResult.rows[0].count,
-                                    totalMessages: totalMessagesResult.rows[0].count,
-                                    totalUsers: totalUsersResult.rows[0].count,
-                                    dailyTotalClicks: dailyTotalClicksResult.rows[0].count || 0,
-                                    totalAllTimeClicks: totalAllTimeClicksResult.rows[0].total_clicks || 0
-                                };
-                            } finally { client.release(); }
-                        })(),
-                        processAndFormatTopButtons('daily'),
-                        processAndFormatTopButtons('all_time')
-                    ]);
-                    
-                    const { dailyActiveUsers, active3d, active7d, inactive3d, inactive7d, totalButtons, totalMessages, totalUsers, dailyTotalClicks, totalAllTimeClicks } = generalStatsData;
+    const [ generalStatsData, topDaily, topAllTime ] = await Promise.all([
+        (async () => {
+            const client = await getClient();
+            try {
+                const dailyActiveUsersResult = await client.query("SELECT COUNT(DISTINCT user_id) FROM public.button_clicks_log WHERE (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date");
+                const active3dResult = await client.query("SELECT COUNT(DISTINCT id) FROM public.users WHERE last_active > NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '3 DAY'");
+                const active7dResult = await client.query("SELECT COUNT(DISTINCT id) FROM public.users WHERE last_active > NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '7 DAY'");
+                const inactive3dResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '3 DAY'");
+                const inactive7dResult = await client.query("SELECT COUNT(*) FROM public.users WHERE last_active < NOW() AT TIME ZONE 'Africa/Cairo' - INTERVAL '7 DAY'");
+                const totalButtonsResult = await client.query('SELECT COUNT(*) FROM public.buttons');
+                const totalMessagesResult = await client.query('SELECT COUNT(*) FROM public.messages');
+                const totalUsersResult = await client.query('SELECT COUNT(*) FROM public.users');
+                const dailyTotalClicksResult = await client.query("SELECT COUNT(*) FROM public.button_clicks_log WHERE (clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date");
+                const totalAllTimeClicksResult = await client.query('SELECT (SELECT COUNT(*) FROM public.button_clicks_log) + COALESCE((SELECT SUM(total_clicks) FROM public.lifetime_button_stats), 0) AS total_clicks');
+                
+                return {
+                    dailyActiveUsers: dailyActiveUsersResult.rows[0].count || 0,
+                    active3d: active3dResult.rows[0].count,
+                    active7d: active7dResult.rows[0].count,
+                    inactive3d: inactive3dResult.rows[0].count,
+                    inactive7d: inactive7dResult.rows[0].count,
+                    totalButtons: totalButtonsResult.rows[0].count,
+                    totalMessages: totalMessagesResult.rows[0].count,
+                    totalUsers: totalUsersResult.rows[0].count,
+                    dailyTotalClicks: dailyTotalClicksResult.rows[0].count || 0,
+                    totalAllTimeClicks: totalAllTimeClicksResult.rows[0].total_clicks || 0
+                };
+            } finally { client.release(); }
+        })(),
+        processAndFormatTopButtons('daily'),
+        processAndFormatTopButtons('all_time')
+    ]);
+    
+    const { dailyActiveUsers, active3d, active7d, inactive3d, inactive7d, totalButtons, totalMessages, totalUsers, dailyTotalClicks, totalAllTimeClicks } = generalStatsData;
 
-                    const generalStats = `*📊 الإحصائيات العامة:*\n\n` +
-                                         `👥 إجمالي المستخدمين: \`${totalUsers}\`\n\n` +
-                                         `*👤 المستخدمون النشطون:*\n` +
-                                         `- اليوم (تفاعلوا): \`${dailyActiveUsers}\`\n` +
-                                         `- آخر 3 أيام: \`${active3d}\`\n` +
-                                         `- آخر 7 أيام: \`${active7d}\`\n\n` +
-                                         `*🚫 المستخدمون غير النشطين:*\n` +
-                                         `- أكثر من 3 أيام: \`${inactive3d}\`\n` +
-                                         `- أكثر من 7 أيام: \`${inactive7d}\`\n\n` +
-                                         `*🗂 محتوى البوت:*\n` +
-                                         `- الأزرار: \`${totalButtons}\`\n` +
-                                         `- الرسائل: \`${totalMessages}\`\n\n` +
-                                         `*🖱️ الضغطات:*\n` +
-                                         `- اليوم: \`${dailyTotalClicks}\`\n` +
-                                         `- الكلية: \`${totalAllTimeClicks}\``;
+    // ✨ التعديل هنا: تم تهريب جميع علامات الشرطة والأقواس
+    const generalStats = `*📊 الإحصائيات العامة:*\n\n` +
+                         `👥 إجمالي المستخدمين: \`${totalUsers}\`\n\n` +
+                         `*👤 المستخدمون النشطون:*\n` +
+                         `\\- اليوم \\(تفاعلوا\\): \`${dailyActiveUsers}\`\n` +
+                         `\\- آخر 3 أيام: \`${active3d}\`\n` +
+                         `\\- آخر 7 أيام: \`${active7d}\`\n\n` +
+                         `*🚫 المستخدمون غير النشطين:*\n` +
+                         `\\- أكثر من 3 أيام: \`${inactive3d}\`\n` +
+                         `\\- أكثر من 7 أيام: \`${inactive7d}\`\n\n` +
+                         `*🗂 محتوى البوت:*\n` +
+                         `\\- الأزرار: \`${totalButtons}\`\n` +
+                         `\\- الرسائل: \`${totalMessages}\`\n\n` +
+                         `*🖱️ الضغطات:*\n` +
+                         `\\- اليوم: \`${dailyTotalClicks}\`\n` +
+                         `\\- الكلية: \`${totalAllTimeClicks}\``;
 
-                    const finalReport = `${generalStats}\n\n*\\-\\-\\-\\-*\n\n${topDaily}\n\n*\\-\\-\\-\\-*\n\n${topAllTime}`;
-// ✨ التعديل هنا: تغيير parse_mode إلى MarkdownV2
-await ctx.reply(finalReport, { parse_mode: 'MarkdownV2' });
-break;
-                }
+    const finalReport = `${generalStats}\n\n*\\-\\-\\-\\-*\n\n${topDaily}\n\n*\\-\\-\\-\\-*\n\n${topAllTime}`;
+    await ctx.reply(finalReport, { parse_mode: 'MarkdownV2' });
+    break;
+}
                 case '🗣️ رسالة جماعية':
                     await updateUserState(userId, { state: 'AWAITING_BROADCAST' });
                     await ctx.reply('أرسل الآن الرسالة التي تريد بثها لجميع المستخدمين:');
