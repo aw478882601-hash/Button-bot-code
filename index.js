@@ -205,10 +205,10 @@ async function trackSentMessages(userId, messageIds) {
 
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتحسب الأزرار النهائية فقط)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تدعم MarkdownV2)
+// دالة لتجميع ومعالجة إحصائيات الأزرار (الإصدار النهائي المتوافق مع MarkdownV2)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
-        // ✨ التعديل هنا: دالة صغيرة لتهريب الرموز الخاصة
         const escapeMarkdownV2 = (text) => {
             if (typeof text !== 'string') return '';
             return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
@@ -218,7 +218,6 @@ async function processAndFormatTopButtons(interval) {
         let query;
 
         if (interval === 'daily') {
-            // ✨ التعديل هنا: تهريب الأقواس في العنوان
             title = '🏆 *الأكثر استخداماً \\(اليوم\\):*';
             query = `
                 SELECT
@@ -234,7 +233,6 @@ async function processAndFormatTopButtons(interval) {
                 LIMIT 10;
             `;
         } else { // All-Time
-            // ✨ التعديل هنا: تهريب الأقواس في العنوان
             title = '🏆 *الأكثر استخداماً \\(الكلي\\):*';
             query = `
                 SELECT
@@ -263,11 +261,10 @@ async function processAndFormatTopButtons(interval) {
         const formattedRows = rows.map((row, index) => {
             let userText = '';
             if (interval === 'daily') {
-                 // ✨ التعديل هنا: تهريب علامة الشرطة في بداية السطر
                 userText = `\n   \\- 👤 المستخدمون: \`${row.unique_users || 0}\``;
             }
-            // ✨ التعديل هنا: استخدام دالة التهريب على اسم الزر وتهريب الشرطة
-            return `${index + 1}\\. > *${escapeMarkdownV2(row.text)}*\n\n   \\- 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
+            // ✨ التعديل الوحيد هنا: إضافة سطر جديد \n بعد الترقيم الرقمي لفصله عن الاقتباس
+            return `${index + 1}\\.\n> *${escapeMarkdownV2(row.text)}*\n\n   \\- 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
         }).join('\n\n\n');
 
         return `${title}\n\n${formattedRows}`;
