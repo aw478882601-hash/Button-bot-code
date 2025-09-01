@@ -646,9 +646,7 @@ const banUnbanHandler = async (ctx, banAction) => {
 bot.command('ban', (ctx) => banUnbanHandler(ctx, true));
 bot.command('unban', (ctx) => banUnbanHandler(ctx, false));
 
-// أمر عرض معلومات المستخدم
-// أمر عرض معلومات المستخدم (بالتنسيق النهائي والمفصل)
-// أمر عرض معلومات المستخدم (مع تنسيق محسن)
+// أمر عرض معلومات المستخدم (يدعم الآن الرد أو استخدام الـ ID)
 bot.command('info', async (ctx) => {
     const client = await getClient();
     try {
@@ -658,15 +656,52 @@ bot.command('info', async (ctx) => {
             return; // ليس مشرفًا
         }
 
-        if (!ctx.message.reply_to_message || !ctx.message.reply_to_message.forward_from) {
-            return ctx.reply('⚠️ للاستخدام الصحيح، قم بالرد على رسالة مُعادة توجيهها من المستخدم بالأمر /info.');
+        let targetUser = null;
+        let targetId = null;
+        let targetName = null;
+        let targetUsername = null;
+
+        // الطريقة الأولى: التحقق من الرد على رسالة موجهة
+        if (ctx.message.reply_to_message && ctx.message.reply_to_message.forward_from) {
+            targetUser = ctx.message.reply_to_message.forward_from;
+            targetId = String(targetUser.id);
+        } 
+        // الطريقة الثانية: التحقق من وجود ID في نص الأمر
+        else {
+            const parts = ctx.message.text.split(' ');
+            if (parts.length > 1 && /^\d+$/.test(parts[1])) {
+                targetId = parts[1];
+            }
         }
 
-        const targetUser = ctx.message.reply_to_message.forward_from;
-        const targetId = String(targetUser.id);
-        const targetName = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
-        const targetUsername = targetUser.username ? `@${targetUser.username}` : 'لا يوجد';
+        // إذا لم يتم تحديد هدف بأي من الطريقتين، أرسل رسالة تعليمات
+        if (!targetId) {
+            return ctx.replyWithHTML(
+                '⚠️ <b>استخدام غير صحيح.</b>\n\n' +
+                'يمكنك استخدام الأمر بطريقتين:\n' +
+                '1️⃣ قم بالرد على رسالة مُعادة توجيهها من المستخدم بالأمر <code>/info</code>.\n' +
+                '2️⃣ اكتب الأمر مع ID المستخدم، مثال: <code>/info 123456789</code>.'
+            );
+        }
 
+        // جلب بيانات المستخدم بناءً على الـ ID
+        // إذا كانت لدينا بيانات المستخدم من الرسالة الموجهة نستخدمها، وإلا نجلبها عبر API
+        if (targetUser) {
+            targetName = `${targetUser.first_name || ''} ${targetUser.last_name || ''}`.trim();
+            targetUsername = targetUser.username ? `@${targetUser.username}` : 'لا يوجد';
+        } else {
+            try {
+                const userChat = await bot.telegram.getChat(targetId);
+                targetName = `${userChat.first_name || ''} ${userChat.last_name || ''}`.trim();
+                targetUsername = userChat.username ? `@${userChat.username}` : 'لا يوجد';
+            } catch (e) {
+                targetName = 'مستخدم غير معروف';
+                targetUsername = 'لا يمكن جلبه';
+                console.error(`Could not fetch info for user ${targetId}:`, e.message);
+            }
+        }
+
+        // استكمال جلب باقي البيانات من قاعدة البيانات
         const [
             botUserResult,
             clicksTodayResult,
@@ -688,9 +723,8 @@ bot.command('info', async (ctx) => {
         ]);
 
         const lastActive = botUserResult.rows[0]?.last_active;
-        const clicksToday = clicksTodayResult.rows[0].count;
+        const clicksToday = clicksTodayResult.rows[0]?.count || 0;
         
-        // ✨ تعديل هنا: تمت إضافة سطرين للفصل بين الأزرار ✨
         const buttonsVisited = buttonsVisitedResult.rows.length > 0 
             ? buttonsVisitedResult.rows.map(r => `- ${r.text} (${r.click_count} ضغطة)`).join('\n\n') 
             : 'لم يزر أي أزرار اليوم';
@@ -708,12 +742,11 @@ bot.command('info', async (ctx) => {
             })
             : 'غير معروف';
 
-        // بناء التقرير النهائي بالتنسيق الجديد
+        // بناء التقرير النهائي
         const userInfoReport = `📋 <b>تقرير المستخدم: ${targetName}</b>\n\n` +
                              `<b>المعرف:</b> ${targetUsername} (<code>${targetId}</code>)\n\n` +
                              `🕒 <b>آخر نشاط:</b> ${lastActiveFormatted}\n\n` +
                              `🖱️ <b>إجمالي الضغطات (اليوم):</b> ${clicksToday}\n\n` +
-                             // ✨ تعديل هنا: تمت إضافة سطرين للفصل عن العنوان ✨
                              `🔘 <b>تفاصيل نشاط الأزرار (اليوم):</b>\n\n` +
                              `${buttonsVisited}`;
 
