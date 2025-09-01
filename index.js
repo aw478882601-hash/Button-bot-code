@@ -203,10 +203,7 @@ async function trackSentMessages(userId, messageIds) {
     }
 }
 
-// دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث)
-// دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية)
-// دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتدعم الفترات الزمنية وتوقيت مصر)
-// دالة لتجميع ومعالجة إحصائيات الأزرار (تم إصلاح توقيت اليوم)
+// دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتحسب الأزرار النهائية فقط)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
@@ -233,6 +230,7 @@ async function processAndFormatTopButtons(interval) {
                 FROM public.button_clicks_log l
                 JOIN button_path_cte p ON p.id = l.button_id
                 WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
+                  AND NOT EXISTS (SELECT 1 FROM public.buttons sub WHERE sub.parent_id = p.id) -- ✨ التعديل هنا
                 GROUP BY p.path
                 ORDER BY clicks_count DESC
                 LIMIT 10;
@@ -245,7 +243,6 @@ async function processAndFormatTopButtons(interval) {
                     p.path,
                     (
                         (SELECT COUNT(*) FROM public.button_clicks_log l WHERE l.button_id = p.id) +
-                        -- *** THE FIX IS HERE: The subquery is now wrapped in COALESCE ***
                         COALESCE((SELECT s.total_clicks FROM public.lifetime_button_stats s WHERE s.button_id = p.id), 0)
                     )::integer AS clicks_count
                 FROM
@@ -255,6 +252,7 @@ async function processAndFormatTopButtons(interval) {
                     UNION
                     SELECT DISTINCT button_id FROM public.lifetime_button_stats
                 ) AS clicked_buttons ON p.id = clicked_buttons.button_id
+                WHERE NOT EXISTS (SELECT 1 FROM public.buttons sub WHERE sub.parent_id = p.id) -- ✨ التعديل هنا
                 ORDER BY
                     clicks_count DESC
                 LIMIT 10;
