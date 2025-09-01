@@ -204,55 +204,45 @@ async function trackSentMessages(userId, messageIds) {
 }
 
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتحسب الأزرار النهائية فقط)
+// دالة لتجميع ومعالجة إحصائيات الأزرار (بتنسيق مُحسّن)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
         let title = '';
         let query;
 
-        const pathCTE = `
-            WITH RECURSIVE button_path_cte AS (
-                SELECT id, text::text AS path FROM public.buttons WHERE parent_id IS NULL
-                UNION ALL
-                SELECT b.id, (p.path || ' / ' || b.text)::text
-                FROM public.buttons b INNER JOIN button_path_cte p ON b.parent_id = p.id
-            )
-        `;
-
         if (interval === 'daily') {
-            title = '*🏆 الأكثر استخداماً (اليوم):*';
+            title = '🏆 *الأكثر استخداماً (اليوم):*';
             query = `
-                ${pathCTE}
                 SELECT
-                    p.path,
+                    b.text,
                     COUNT(l.id)::integer AS clicks_count,
                     COUNT(DISTINCT l.user_id)::integer AS unique_users
                 FROM public.button_clicks_log l
-                JOIN button_path_cte p ON p.id = l.button_id
+                JOIN public.buttons b ON b.id = l.button_id
                 WHERE (l.clicked_at AT TIME ZONE 'Africa/Cairo')::date = (NOW() AT TIME ZONE 'Africa/Cairo')::date
-                  AND NOT EXISTS (SELECT 1 FROM public.buttons sub WHERE sub.parent_id = p.id) -- ✨ التعديل هنا
-                GROUP BY p.path
+                  AND NOT EXISTS (SELECT 1 FROM public.buttons sub WHERE sub.parent_id = b.id)
+                GROUP BY b.text
                 ORDER BY clicks_count DESC
                 LIMIT 10;
             `;
         } else { // All-Time
-            title = '*🏆 الأكثر استخداماً (الكلي):*';
+            title = '🏆 *الأكثر استخداماً (الكلي):*';
             query = `
-                ${pathCTE}
                 SELECT
-                    p.path,
+                    b.text,
                     (
-                        (SELECT COUNT(*) FROM public.button_clicks_log l WHERE l.button_id = p.id) +
-                        COALESCE((SELECT s.total_clicks FROM public.lifetime_button_stats s WHERE s.button_id = p.id), 0)
+                        (SELECT COUNT(*) FROM public.button_clicks_log l WHERE l.button_id = b.id) +
+                        COALESCE((SELECT s.total_clicks FROM public.lifetime_button_stats s WHERE s.button_id = b.id), 0)
                     )::integer AS clicks_count
                 FROM
-                    button_path_cte p
+                    public.buttons b
                 JOIN (
                     SELECT DISTINCT button_id FROM public.button_clicks_log
                     UNION
                     SELECT DISTINCT button_id FROM public.lifetime_button_stats
-                ) AS clicked_buttons ON p.id = clicked_buttons.button_id
-                WHERE NOT EXISTS (SELECT 1 FROM public.buttons sub WHERE sub.parent_id = p.id) -- ✨ التعديل هنا
+                ) AS clicked_buttons ON b.id = clicked_buttons.button_id
+                WHERE NOT EXISTS (SELECT 1 FROM public.buttons sub WHERE sub.parent_id = b.id)
                 ORDER BY
                     clicks_count DESC
                 LIMIT 10;
@@ -267,10 +257,11 @@ async function processAndFormatTopButtons(interval) {
             if (interval === 'daily') {
                 userText = `\n   - 👤 المستخدمون: \`${row.unique_users || 0}\``;
             }
-            return `${index + 1}. *${row.path}*\n   - 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
-        }).join('\n\n');
+            // ✨ التعديل هنا: إضافة blockquote ومسافة إضافية
+            return `${index + 1}. > *${row.text}*\n\n   - 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
+        }).join('\n\n\n'); // ✨ التعديل هنا: زيادة المسافة بين الأسطر
 
-        return `${title}\n${formattedRows}`;
+        return `${title}\n\n${formattedRows}`;
     } finally {
         client.release();
     }
