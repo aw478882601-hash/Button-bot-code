@@ -204,15 +204,22 @@ async function trackSentMessages(userId, messageIds) {
 }
 
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتحسب الأزرار النهائية فقط)
-// دالة لتجميع ومعالجة إحصائيات الأزرار (بتنسيق مُحسّن)
+// دالة لتجميع ومعالجة إحصائيات الأزرار (تدعم MarkdownV2)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
+        // ✨ التعديل هنا: دالة صغيرة لتهريب الرموز الخاصة
+        const escapeMarkdownV2 = (text) => {
+            if (typeof text !== 'string') return '';
+            return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+        };
+
         let title = '';
         let query;
 
         if (interval === 'daily') {
-            title = '🏆 *الأكثر استخداماً (اليوم):*';
+            // ✨ التعديل هنا: تهريب الأقواس في العنوان
+            title = '🏆 *الأكثر استخداماً \\(اليوم\\):*';
             query = `
                 SELECT
                     b.text,
@@ -227,7 +234,8 @@ async function processAndFormatTopButtons(interval) {
                 LIMIT 10;
             `;
         } else { // All-Time
-            title = '🏆 *الأكثر استخداماً (الكلي):*';
+            // ✨ التعديل هنا: تهريب الأقواس في العنوان
+            title = '🏆 *الأكثر استخداماً \\(الكلي\\):*';
             query = `
                 SELECT
                     b.text,
@@ -250,16 +258,17 @@ async function processAndFormatTopButtons(interval) {
         }
 
         const { rows } = await client.query(query);
-        if (rows.length === 0) return `${title}\nلا توجد بيانات لعرضها.`;
+        if (rows.length === 0) return `${title}\nلا توجد بيانات لعرضها\\.`;
         
         const formattedRows = rows.map((row, index) => {
             let userText = '';
             if (interval === 'daily') {
-                userText = `\n   - 👤 المستخدمون: \`${row.unique_users || 0}\``;
+                 // ✨ التعديل هنا: تهريب علامة الشرطة في بداية السطر
+                userText = `\n   \\- 👤 المستخدمون: \`${row.unique_users || 0}\``;
             }
-            // ✨ التعديل هنا: إضافة blockquote ومسافة إضافية
-            return `${index + 1}. > *${row.text}*\n\n   - 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
-        }).join('\n\n\n'); // ✨ التعديل هنا: زيادة المسافة بين الأسطر
+            // ✨ التعديل هنا: استخدام دالة التهريب على اسم الزر وتهريب الشرطة
+            return `${index + 1}\\. > *${escapeMarkdownV2(row.text)}*\n\n   \\- 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
+        }).join('\n\n\n');
 
         return `${title}\n\n${formattedRows}`;
     } finally {
@@ -1935,9 +1944,10 @@ if (state === 'CONTACTING_ADMIN') {
                                          `- اليوم: \`${dailyTotalClicks}\`\n` +
                                          `- الكلية: \`${totalAllTimeClicks}\``;
 
-                    const finalReport = `${generalStats}\n\n---\n\n${topDaily}\n\n---\n\n${topAllTime}`;
-                    await ctx.reply(finalReport, { parse_mode: 'Markdown' });
-                    break;
+                    const finalReport = `${generalStats}\n\n*\\-\\-\\-\\-*\n\n${topDaily}\n\n*\\-\\-\\-\\-*\n\n${topAllTime}`;
+// ✨ التعديل هنا: تغيير parse_mode إلى MarkdownV2
+await ctx.reply(finalReport, { parse_mode: 'MarkdownV2' });
+break;
                 }
                 case '🗣️ رسالة جماعية':
                     await updateUserState(userId, { state: 'AWAITING_BROADCAST' });
