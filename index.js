@@ -205,6 +205,7 @@ async function trackSentMessages(userId, messageIds) {
 
 // دالة لتجميع ومعالجة إحصائيات الأزرار (تم التحديث لتحسب الأزرار النهائية فقط)
 // دالة لتجميع ومعالجة إحصائيات الأزرار (بدون ترقيم رقمي)
+// دالة لتجميع ومعالجة إحصائيات الأزرار (الإصدار النهائي بتنسيق الاقتباس فقط)
 async function processAndFormatTopButtons(interval) {
     const client = await getClient();
     try {
@@ -257,13 +258,13 @@ async function processAndFormatTopButtons(interval) {
         const { rows } = await client.query(query);
         if (rows.length === 0) return `${title}\nلا توجد بيانات لعرضها\\.`;
         
-        const formattedRows = rows.map((row) => { // ✨ تم حذف index من هنا
+        const formattedRows = rows.map((row) => {
             let userText = '';
             if (interval === 'daily') {
                 userText = `\n   \\- 👤 المستخدمون: \`${row.unique_users || 0}\``;
             }
-            // ✨ التعديل هنا: إزالة الترقيم الرقمي واستخدام علامة النقطة والاقتباس
-            return `\\- > *${escapeMarkdownV2(row.text)}*\n   \\- 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
+            // ✨ التعديل هنا: إزالة النقطة \\- والإبقاء على الاقتباس > فقط
+            return `> *${escapeMarkdownV2(row.text)}*\n   \\- 🖱️ الضغطات: \`${row.clicks_count}\`${userText}`;
         }).join('\n\n');
 
         return `${title}\n\n${formattedRows}`;
