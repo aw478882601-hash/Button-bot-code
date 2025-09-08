@@ -1342,11 +1342,16 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     try {
                         await client.query('BEGIN'); // Start transaction
 
-                        // Step 1: First, make space by updating the order of existing messages.
-                        // The fix is applied here to ensure updates happen from last to first.
+                        // Step 1: Make space using a subquery to avoid syntax errors and race conditions.
                         if (targetOrder !== undefined) {
                             await client.query(
-                                'UPDATE public.messages SET "order" = "order" + 1 WHERE button_id = $1 AND "order" >= $2 ORDER BY "order" DESC',
+                                `UPDATE public.messages 
+                                 SET "order" = "order" + 1 
+                                 WHERE id IN (
+                                     SELECT id FROM public.messages 
+                                     WHERE button_id = $1 AND "order" >= $2 
+                                     ORDER BY "order" DESC
+                                 )`,
                                 [buttonId, targetOrder]
                             );
                         }
