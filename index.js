@@ -1571,6 +1571,37 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
         Markup.keyboard(await generateKeyboard(userId)).resize()
     );
 }
+      if (isAdmin && state === 'AWAITING_DELETE_CONFIRMATION') {
+            const { buttonId, buttonName } = stateData;
+
+            if (ctx.message && ctx.message.text === 'نعم') {
+                // User confirmed deletion
+                const statusMessage = await ctx.reply(`⏳ جاري الحذف العميق للقسم "${buttonName}"...`);
+                
+                try {
+                    await client.query('BEGIN');
+                    await deepDeleteButton(buttonId, client);
+                    await client.query('COMMIT');
+
+                    await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `🗑️ تم الحذف العميق للقسم "${buttonName}" بنجاح.`);
+                    
+                    await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
+                    await refreshKeyboardView(ctx, userId, 'تم تحديث لوحة المفاتيح.');
+
+                } catch (error) {
+                    await client.query('ROLLBACK');
+                    console.error("Deep-delete button error:", error);
+                    await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, '❌ حدث خطأ فادح أثناء عملية الحذف.');
+                    await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
+                }
+
+            } else {
+                // User sent something else, so cancel the operation
+                await updateUserState(userId, { state: 'EDITING_BUTTONS', stateData: {} });
+                await ctx.reply('👍 تم إلغاء عملية الحذف.', Markup.keyboard(await generateKeyboard(userId)).resize());
+            }
+            return;
+        }
 
 // الخطوة 3: استقبال الرسالة وإرسالها للأدمن
 if (state === 'CONTACTING_ADMIN') {
@@ -2218,16 +2249,30 @@ bot.on('callback_query', async (ctx) => {
                 await ctx.editMessageText('أدخل الاسم الجديد:');
                 return;
             }
-            if (subAction === 'delete') {
+           if (subAction === 'delete') {
                 const buttonResult = await client.query('SELECT text FROM public.buttons WHERE id = $1', [buttonId]);
                 if (buttonResult.rows.length === 0) return ctx.answerCbQuery('الزر غير موجود بالفعل.');
 
-                const confirmationKeyboard = Markup.inlineKeyboard([
-                    Markup.button.callback('✅ نعم، قم بالحذف', `confirm_delete_button:yes:${buttonId}`),
-                    Markup.button.callback('❌ إلغاء', `confirm_delete_button:no:${buttonId}`)
-                ]);
-                await ctx.editMessageText(`🗑️ هل أنت متأكد من حذف الزر "${buttonResult.rows[0].text}" وكل ما بداخله؟ هذا الإجراء لا يمكن التراجع عنه.`, confirmationKeyboard);
-                return;
+                const buttonName = buttonResult.rows[0].text;
+
+                // Set the state to await for a forced reply
+                await updateUserState(userId, { 
+                    state: 'AWAITING_DELETE_CONFIRMATION', 
+                    stateData: { buttonId: buttonId, buttonName: buttonName } 
+                });
+                
+                await ctx.answerCbQuery();
+
+                // Send a clear warning message and ask for confirmation
+                const warningMessage = `️⚠️ **تحذير خطير** ⚠️\n\n` +
+                                     `أنت على وشك حذف الزر **"${buttonName}"**.\n\n` +
+                                     `سيؤدي هذا إلى **حذف جميع الأزرار الفرعية والرسائل والمحتويات الموجودة بداخله بشكل نهائي ولا يمكن التراجع عن هذا الإجراء.**\n\n` +
+                                     `إذا كنت متأكدًا تمامًا، اكتب كلمة "نعم" وأرسلها.`;
+
+                return ctx.reply(warningMessage, { 
+                    parse_mode: 'Markdown',
+                    reply_markup: { force_reply: true }
+                });
             }
             if (subAction === 'adminonly') {
                 const buttonResult = await client.query('SELECT admin_only FROM public.buttons WHERE id = $1', [buttonId]);
