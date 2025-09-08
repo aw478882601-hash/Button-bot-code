@@ -1342,18 +1342,21 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     try {
                         await client.query('BEGIN'); // Start transaction
 
-                        // Step 1: Make space using a subquery to avoid syntax errors and race conditions.
+                        // Step 1: Make space for the new message with guaranteed sequential updates.
                         if (targetOrder !== undefined) {
-                            await client.query(
-                                `UPDATE public.messages 
-                                 SET "order" = "order" + 1 
-                                 WHERE id IN (
-                                     SELECT id FROM public.messages 
-                                     WHERE button_id = $1 AND "order" >= $2 
-                                     ORDER BY "order" DESC
-                                 )`,
+                            // First, get all messages that need to be shifted, in reverse order.
+                            const messagesToShiftResult = await client.query(
+                                'SELECT id FROM public.messages WHERE button_id = $1 AND "order" >= $2 ORDER BY "order" DESC',
                                 [buttonId, targetOrder]
                             );
+
+                            // Next, loop through them and update one by one. This prevents collisions.
+                            for (const msg of messagesToShiftResult.rows) {
+                                await client.query(
+                                    'UPDATE public.messages SET "order" = "order" + 1 WHERE id = $1',
+                                    [msg.id]
+                                );
+                            }
                         }
                         
                         // If no targetOrder is specified, calculate the new order to be at the end.
