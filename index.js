@@ -5,6 +5,7 @@
 // --- 1. استدعاء المكتبات والإعدادات الأولية ---
 const { Telegraf, Markup } = require('telegraf');
 const { Pool } = require('pg');
+const axios = require('axios');
 
 // --- 2. تهيئة Pooler الاتصال بـ Supabase ---
 const pool = new Pool({
@@ -31,39 +32,26 @@ async function getClient() {
     }
 }
 // دالة جديدة مخصصة لعملية إلغاء التثبيت
-// دالة جديدة مخصصة لعملية إلغاء التثبيت (ترسل تقريرًا جديدًا)
-async function unpinAllAlerts(ctx, client) {
+// دالة جديدة لبدء مهمة إلغاء التثبيت في الخلفية
+async function startUnpinAllJob(ctx, client) {
     try {
-        const usersToUnpinResult = await client.query('SELECT id, chat_id, pinned_alert_id FROM public.users WHERE pinned_alert_id IS NOT NULL');
-        const users = usersToUnpinResult.rows;
+        const userId = String(ctx.from.id);
+        const insertQuery = `
+            INSERT INTO public.background_jobs (job_type, triggered_by_user_id)
+            VALUES ('unpin_all', $1)
+            RETURNING id;
+        `;
+        const result = await client.query(insertQuery, [userId]);
+        const jobId = result.rows[0].id;
 
-        if (users.length === 0) {
-            await ctx.reply('✅ **تقرير إلغاء التثبيت:**\nلا يوجد مستخدمون لديهم تنبيهات مثبتة حاليًا.');
-            return;
-        }
-
-        let successCount = 0;
-        let failureCount = 0;
-        for (const user of users) {
-            try {
-                await bot.telegram.unpinChatMessage(user.chat_id, user.pinned_alert_id);
-                successCount++;
-            } catch (e) {
-                console.error(`Failed to unpin for user ${user.id}:`, e.message);
-                failureCount++;
-            }
-        }
-
-        await client.query('UPDATE public.users SET pinned_alert_id = NULL WHERE pinned_alert_id IS NOT NULL');
-
-        // إرسال التقرير النهائي كرسالة جديدة مستقلة
-        const finalMessage = `🎉 **تقرير إتمام عملية إلغاء التثبيت** 🎉\n\n- ✅ **النجاح:** تم إلغاء التثبيت لـ ${successCount} مستخدم.\n- ❌ **الفشل:** فشل الإلغاء لـ ${failureCount} مستخدم.`;
-        await ctx.reply(finalMessage);
+        // إرسال طلب لـ Google Script لبدء المهمة
+        await axios.post(process.env.GOOGLE_SCRIPT_URL, { jobId });
+        
+        await ctx.answerCbQuery('✅ تم بدء عملية إلغاء التثبيت في الخلفية. سيصلك تقرير برسالة جديدة عند الانتهاء.', { show_alert: true });
 
     } catch(error) {
-        console.error("Error during unpinAllAlerts process:", error);
-        // إرسال تقرير الخطأ كرسالة جديدة مستقلة
-        await ctx.reply('❌ حدث خطأ فادح أثناء محاولة إلغاء تثبيت التنبيهات.');
+        console.error("Error starting unpin_all job:", error);
+        await ctx.reply('❌ حدث خطأ فادح أثناء محاولة بدء مهمة إلغاء التثبيت.');
     }
 }
 // دالة لتحويل تنسيقات Markdown الأساسية إلى HTML
@@ -296,6 +284,7 @@ async function refreshKeyboardView(ctx, userId, confirmationMessage) {
         console.error('Error refreshing keyboard view:', error);
     }
 }
+
 async function generateKeyboard(userId) {
   const client = await getClient();
   try {
@@ -305,10 +294,14 @@ async function generateKeyboard(userId) {
     let keyboardRows = [];
 
     // --- لوحات المفاتيح الخاصة بالحالات ---
+    // ✨ التعديل هنا: إضافة حالة البث الجماعي
+    if (isAdmin && state === 'AWAITING_BROADCAST_MESSAGES') {
+        return [['✅ إنهاء الإضافة والبدء']];
+    }
     if (state === 'AWAITING_BATCH_NUMBER' || state === 'CONTACTING_ADMIN') {
         return [['❌ إلغاء العملية']];
     }
-  
+    // ... باقي الحالات تبقى كما هي
     if (state === 'AWAITING_ALERT_MESSAGES') {
         return [['✅ إنهاء إضافة رسائل التنبيه']];
     }
@@ -335,10 +328,10 @@ async function generateKeyboard(userId) {
     }
     
     // --- لوحة مفاتيح قسم الإشراف ---
-    // --- لوحة مفاتيح قسم الإشراف ---
     if (currentPath === 'supervision') {
         keyboardRows = [
-            ['📊 الإحصائيات'], // تم حذف زر الرسالة الجماعية
+            // ✨ التعديل هنا: إعادة زر الرسالة الجماعية
+            ['📊 الإحصائيات', '🗣️ رسالة جماعية'],
             ['🔔 رسالة التنبيه', '📝 تعديل رسالة الترحيب'],
             ['⚙️ تعديل المشرفين', '🚫 قائمة المحظورين'],
             ['🔙 رجوع', '🔝 القائمة الرئيسية']
@@ -346,7 +339,7 @@ async function generateKeyboard(userId) {
         return keyboardRows;
     }
 
-    // --- بناء لوحة المفاتيح الرئيسية ---
+    // --- باقي الدالة يبقى كما هو بدون تغيير ---
     let buttonsToRender;
     let query, values;
     if (currentPath === 'root') {
@@ -387,13 +380,12 @@ async function generateKeyboard(userId) {
 
     if (currentRow.length > 0) keyboardRows.push(currentRow);
 
-    // --- إضافة أزرار الإدارة ---
     if (isAdmin) {
         if (isAdmin && state === 'EDITING_BUTTONS') { 
-    keyboardRows.push(['➕ إضافة زر']);
-    keyboardRows.push(['📥 نقل البيانات', '➕ أزرار افتراضية']);
-    keyboardRows.push(['✂️ نقل أزرار', '📥 نسخ أزرار']);
-}
+            keyboardRows.push(['➕ إضافة زر']);
+            keyboardRows.push(['📥 نقل البيانات', '➕ أزرار افتراضية']);
+            keyboardRows.push(['✂️ نقل أزرار', '📥 نسخ أزرار']);
+        }
         const otherAdminActions = [];
         if (state === 'EDITING_CONTENT' && !['root', 'supervision'].includes(currentPath)) {
             otherAdminActions.push('➕ إضافة رسالة');
@@ -719,8 +711,7 @@ bot.command('info', async (ctx) => {
             `, [targetId])
         ]);
 
-        const lastActive = botUserResult.rows[0]?.last_active;
-        const clicksToday = clicksTodayResult.rows[0]?.count || 0;
+        const lastActive = botUserResult.rows[0]?.last_active;        const clicksToday = clicksTodayResult.rows[0]?.count || 0;
         
         const buttonsVisited = buttonsVisitedResult.rows.length > 0 
             ? buttonsVisitedResult.rows.map(r => `- ${r.text} (${r.click_count} ضغطة)`).join('\n\n') 
@@ -768,6 +759,113 @@ const mainMessageHandler = async (ctx) => {
 
         await client.query('UPDATE public.users SET last_active = NOW() WHERE id = $1', [userId]);
 
+      // ... بعد سطر تحديث آخر نشاط
+
+            // =================================================================
+            // |      منطق تجميع رسائل البث الجماعي (النسخة النهائية)            |
+            // =================================================================
+            if (isAdmin && state === 'AWAITING_BROADCAST_MESSAGES') {
+                const { collectedMessages = [] } = stateData;
+
+                // --- 1. التعامل مع زر الإنهاء ---
+                if (ctx.message && ctx.message.text === '✅ إنهاء الإضافة والبدء') {
+                    if (collectedMessages.length === 0) {
+                        await updateUserState(userId, { state: 'NORMAL', stateData: {} });
+                        return ctx.reply('تم إلغاء العملية لعدم إضافة أي رسائل.', Markup.keyboard(await generateKeyboard(userId)).resize());
+                    }
+
+                    const statusMessage = await ctx.reply('⏳ جارٍ تسجيل حزمة الرسائل وإرسالها للمعالجة...');
+                    
+                    try {
+                        const jobData = { messages: collectedMessages };
+
+                        const insertQuery = `
+                            INSERT INTO public.background_jobs (job_type, job_data, triggered_by_user_id)
+                            VALUES ('broadcast', $1::jsonb, $2)
+                            RETURNING id;
+                        `;
+                        const result = await client.query(insertQuery, [JSON.stringify(jobData), userId]);
+                        const jobId = result.rows[0].id;
+
+                        await axios.post(process.env.GOOGLE_SCRIPT_URL, { jobId });
+                        
+                        await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined,
+                            `✅ تم بدء عملية بث ${collectedMessages.length} رسالة في الخلفية. سيصلك تقرير عند الانتهاة.`
+                        );
+
+                    } catch (error) {
+                        console.error("Error starting multi-message broadcast job:", error);
+                        await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined,
+                            '❌ حدث خطأ أثناء محاولة بدء مهمة البث.'
+                        );
+                    } finally {
+                        await updateUserState(userId, { state: 'NORMAL' });
+                        await refreshKeyboardView(ctx, userId, 'تم الرجوع للوضع الطبيعي.');
+                    }
+                    return; 
+                }
+
+                // --- 2. تجميع الرسائل الواردة ---
+               // --- 2. تجميع الرسائل الواردة ---
+let newMessageObject;
+if (ctx.message.poll) {
+    try {
+        const originalPoll = ctx.message.poll;
+
+        // نجعل البوت ينشئ استطلاعًا جديدًا بناءً على بيانات الاستطلاع الأصلي
+        const botOwnedPoll = await ctx.replyWithPoll(
+            originalPoll.question,
+            originalPoll.options.map(option => option.text),
+            {
+                is_anonymous: originalPoll.is_anonymous,
+                type: originalPoll.type,
+                allows_multiple_answers: originalPoll.allows_multiple_answers,
+                correct_option_id: originalPoll.correct_option_id,
+                explanation: originalPoll.explanation,
+                explanation_entities: originalPoll.explanation_entities,
+                open_period: originalPoll.open_period,
+                close_date: originalPoll.close_date,
+                is_closed: originalPoll.is_closed
+            }
+        );
+        
+        // الآن نخزن بيانات الاستطلاع الجديد الذي أنشأه البوت
+        newMessageObject = {
+            type: "poll",
+            content: String(botOwnedPoll.message_id), // ID رسالة الاستطلاع الجديد
+            caption: String(botOwnedPoll.chat.id),    // ID المحادثة (نفس المحادثة الحالية)
+            entities: []
+        };
+
+    } catch (e) {
+        console.error("Failed to create and handle poll:", e);
+        return ctx.reply('حدث خطأ فادح أثناء إنشاء الاستطلاع. يرجى التحقق من صلاحيات البوت.');
+    }
+}
+// ... باقي الكود
+                else if (ctx.message.text) {
+                    newMessageObject = { type: "text", content: ctx.message.text, entities: ctx.message.entities || [] };
+                } else if (ctx.message.photo) {
+                    newMessageObject = { type: "photo", content: ctx.message.photo.pop().file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] };
+                } else if (ctx.message.video) {
+                    newMessageObject = { type: "video", content: ctx.message.video.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] };
+                } else if (ctx.message.document) {
+                    newMessageObject = { type: "document", content: ctx.message.document.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] };
+                } else if (ctx.message.audio) {
+                    newMessageObject = { type: "audio", content: ctx.message.audio.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] };
+                } else if (ctx.message.voice) {
+                    newMessageObject = { type: "voice", content: ctx.message.voice.file_id, caption: ctx.message.caption || '', entities: ctx.message.caption_entities || [] };
+                } else { 
+                    return ctx.reply("⚠️ نوع الرسالة غير مدعوم للبث الجماعي.");
+                }
+
+                const updatedCollectedMessages = [...collectedMessages, newMessageObject];
+                await updateUserState(userId, { stateData: { collectedMessages: updatedCollectedMessages } });
+                
+                await ctx.reply(`👍 تمت إضافة الرسالة (${updatedCollectedMessages.length}). أرسل المزيد أو اضغط على زر الإنهاء.`);
+                return;
+            }
+            // --- انتهاء منطق تجميع الرسائل ---
         // =================================================================
         // |               منطق عرض رسالة التنبيه (النسخة النهائية)             |
         // =================================================================
@@ -1109,16 +1207,19 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
             }
 
             // ثانيًا، إذا كانت الرسالة استطلاعًا مباشرًا
+           // ثانيًا، إذا كانت الرسالة استطلاعًا مباشرًا
             if (ctx.message && ctx.message.poll && !ctx.message.forward_from && !ctx.message.forward_from_chat) {
                 try {
+                    // 1. Bot copies the poll to the current chat to get a stable reference.
                     const copiedMessage = await ctx.copyMessage(ctx.chat.id);
                     const { collectedMessages = [] } = stateData;
                     
                     const messageObject = {
                         is_poll: true,
-                        // ✨✨✨  هذا هو السطر الذي تم تصحيحه ✨✨✨
-                        from_chat_id: ctx.chat.id, // نستخدم ID المحادثة الحالية مباشرة
-                        message_id: copiedMessage.message_id // نأخذ فقط ID الرسالة الجديدة
+                        // 2. Use the current chat ID.
+                        from_chat_id: ctx.chat.id, 
+                        // 3. Use the message ID of the NEWLY copied message.
+                        message_id: copiedMessage.message_id 
                     };
 
                     const updatedMessages = [...collectedMessages, messageObject];
@@ -1127,7 +1228,7 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                     await ctx.reply(`✅ تم اعتماد نسخة الاستطلاع التي أنشأها البوت (${updatedMessages.length}). أرسل المزيد أو اضغط "إنهاء".`);
                 
                 } catch(e) {
-                    console.error("Failed to auto-copy and save poll:", e);
+                    console.error("Failed to handle and copy poll:", e); // Updated error message for clarity
                     await ctx.reply('حدث خطأ أثناء معالجة الاستطلاع.');
                 }
                 return; 
@@ -1383,19 +1484,37 @@ if (isAdmin && state === 'DYNAMIC_TRANSFER') {
                 return;
             }
 
-            if (state === 'AWAITING_BROADCAST') {
-                const allUsersResult = await client.query('SELECT id FROM public.users WHERE banned = false');
-                const allUsers = allUsersResult.rows;
-                let successCount = 0; let failureCount = 0;
-                const statusMessage = await ctx.reply(`⏳ جاري إرسال الرسالة إلى ${allUsers.length} مستخدم...`);
-                for (const user of allUsers) {
-                    try { await ctx.copyMessage(user.id); successCount++; } 
-                    catch (e) { failureCount++; console.error(`Failed to broadcast to user ${user.id}:`, e.message); }
-                }
-                await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ تم الإرسال بنجاح إلى ${successCount} مستخدم.\n❌ فشل الإرسال إلى ${failureCount} مستخدم.`);
-                await updateUserState(userId, { state: 'NORMAL' });
-                return;
+           // الكود الجديد والمصحح
+if (state === 'AWAITING_BROADCAST') {
+    const allUsersResult = await client.query('SELECT id FROM public.users WHERE banned = false');
+    const allUsers = allUsersResult.rows;
+    let successCount = 0;
+    let failureCount = 0;
+    const statusMessage = await ctx.reply(`⏳ جاري إرسال الرسالة إلى ${allUsers.length} مستخدم...`);
+
+    // التحقق إذا كانت الرسالة استطلاعًا
+    const isPoll = !!ctx.message.poll;
+
+    for (const user of allUsers) {
+        try {
+            if (isPoll) {
+                // استخدم forwardMessage للاستطلاعات للحفاظ على التفاعلية
+                await bot.telegram.forwardMessage(user.id, ctx.chat.id, ctx.message.message_id);
+            } else {
+                // استخدم copyMessage لباقي أنواع الرسائل لإخفاء هوية المرسل
+                await ctx.copyMessage(user.id);
             }
+            successCount++;
+        } catch (e) {
+            failureCount++;
+            console.error(`Failed to broadcast to user ${user.id}:`, e.message);
+        }
+    }
+
+    await ctx.telegram.editMessageText(ctx.chat.id, statusMessage.message_id, undefined, `✅ تم الإرسال بنجاح إلى ${successCount} مستخدم.\n❌ فشل الإرسال إلى ${failureCount} مستخدم.`);
+    await updateUserState(userId, { state: 'NORMAL' });
+    return;
+}
 
             if (state === 'AWAITING_WELCOME_MESSAGE') {
                 if (!ctx.message.text) return ctx.reply('⚠️ يرجى إرسال رسالة نصية فقط.');
@@ -1988,8 +2107,19 @@ if (state === 'CONTACTING_ADMIN') {
     break;
 }
                 case '🗣️ رسالة جماعية':
-                    await updateUserState(userId, { state: 'AWAITING_BROADCAST' });
-                    await ctx.reply('أرسل الآن الرسالة التي تريد بثها لجميع المستخدمين:');
+                    await updateUserState(userId, { 
+                        state: 'AWAITING_BROADCAST_MESSAGES', 
+                        stateData: { collectedMessages: [] }
+                    });
+                    await ctx.reply(
+                        '📝 **وضع البث الجماعي** 📝\n\n' +
+                        'أرسل أو وجّه الآن **كل** الرسائل التي تريد بثها للمستخدمين (نص، صورة، فيديو، ملف...).' +
+                        '\n\nعندما تنتهي، اضغط على زر "✅ إنهاء الإضافة والبدء".',
+                        {
+                            parse_mode: 'Markdown',
+                            ...Markup.keyboard(await generateKeyboard(userId)).resize()
+                        }
+                    );
                     break;
                 case '⚙️ تعديل المشرفين':
                      if (userId !== process.env.SUPER_ADMIN_ID) { 
@@ -2151,8 +2281,9 @@ bot.on('callback_query', async (ctx) => {
         const action = parts[0];
 
         if (action === 'alert') {
-            // ... (No changes needed in this block, keeping it for completeness)
             const subAction = parts[1];
+            if (!userDoc.is_admin) return ctx.answerCbQuery('غير مصرح لك.', { show_alert: true });
+            
             if (subAction === 'set') {
                 await updateUserState(userId, { state: 'AWAITING_ALERT_MESSAGES', stateData: { collectedMessages: [] } });
                 await ctx.answerCbQuery();
@@ -2162,13 +2293,13 @@ bot.on('callback_query', async (ctx) => {
             }
             if (subAction === 'delete') {
                 await client.query('UPDATE public.settings SET alert_message = NULL, alert_message_set_at = NULL, alert_duration_hours = NULL WHERE id = 1');
-                await ctx.answerCbQuery('تم الحذف! ستبدأ عملية إلغاء التثبيت الآن وسيصلك تقرير برسالة جديدة.', { show_alert: true });
-                await unpinAllAlerts(ctx, client);
+                await ctx.editMessageText('✅ تم حذف التنبيه. الآن ستبدأ عملية إلغاء التثبيت في الخلفية.');
+                await startUnpinAllJob(ctx, client); // <-- استدعاء الدالة الجديدة
                 return;
             }
             if (subAction === 'unpin_all') {
-                await ctx.answerCbQuery('ستبدأ عملية إلغاء التثبيت الآن وسيصلك تقرير برسالة جديدة عند الانتهاء.', { show_alert: true });
-                await unpinAllAlerts(ctx, client);
+                await ctx.editMessageText('⏳ جارٍ بدء مهمة إلغاء التثبيت...');
+                await startUnpinAllJob(ctx, client); // <-- استدعاء الدالة الجديدة
                 return;
             }
         }
