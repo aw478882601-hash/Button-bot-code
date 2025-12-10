@@ -2,17 +2,44 @@ name: Supabase Keep-Alive
 
 on:
   schedule:
-    - cron: "0 1 * * *"
-  # هذا السطر يسمح لك بتشغيله يدوياً
+    # التشغيل كل 6 ساعات لضمان النشاط المستمر وعدم توقف المشروع
+    - cron: "0 */6 * * *"
+  # يسمح لك بتشغيله يدوياً للتجربة الفورية
   workflow_dispatch: {}
 
 jobs:
-  keep-alive:
+  wake-up-and-verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Send API Request to Supabase
+      - name: Ping Supabase and Verify Status
+        env:
+          # تم تحديث الرابط هنا ببياناتك الجديدة
+          SUPABASE_URL: 'https://wjaqthkgwmqnuesrsvxr.supabase.co/rest/v1/users?select=id&limit=1'
+          SUPABASE_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          curl -X GET \
-          'https://wjaqthkgwmqnuesrsvxr.supabase.co/rest/v1/users?select=id&limit=1' \
-          -H 'apikey: ${{ secrets.SUPABASE_ANON_KEY }}' \
-          -H 'Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}'
+          MAX_RETRIES=5
+          RETRY_DELAY=15
+          
+          echo "📡 Connecting to Supabase Project (wjaqthkgwmqnuesrsvxr)..."
+          
+          for ((i=1; i<=MAX_RETRIES; i++)); do
+            # إرسال الطلب والتحقق من كود الحالة فقط
+            HTTP_STATUS=$(curl -o /dev/null -s -w "%{http_code}" -X GET "$SUPABASE_URL" \
+              -H "apikey: $SUPABASE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_KEY")
+            
+            if [ "$HTTP_STATUS" -eq 200 ]; then
+              echo "✅ Success! Database is Active and Responding (Status: 200)."
+              exit 0
+            else
+              echo "⚠️ Attempt $i/$MAX_RETRIES failed (Status: $HTTP_STATUS). Database might be sleeping..."
+              
+              if [ $i -lt $MAX_RETRIES ]; then
+                echo "⏳ Waiting ${RETRY_DELAY} seconds for wake-up..."
+                sleep $RETRY_DELAY
+              fi
+            fi
+          done
+          
+          echo "❌ Critical: Failed to wake up database after $MAX_RETRIES attempts."
+          exit 1
